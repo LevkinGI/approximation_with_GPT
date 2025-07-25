@@ -43,6 +43,7 @@ def load_records(root: Path) -> List[DataSet]:
             continue
         fs = 1.0 / dt
         ts = TimeSeries(t=t, s=s, meta=RecordMeta(fs=fs))
-        datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag, ts=ts))
+        datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag,
+                               ts=ts, root=data_dir))
         logger.info("Загружен %s: %d точек, fs=%.2f ГГц", path.name, len(t), fs / GHZ)
     return datasets
