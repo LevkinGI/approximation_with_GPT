@@ -32,7 +32,8 @@ def load_records(root: Path) -> List[DataSet]:
         x0 = x[np.argmax(s)]
         t = 2.0 * (x - x0) / C_M_S  # секунды
         cutoff = 0.4e-9 if tag == "LF" else 0.1e-9
-        mask = (t >= 0) & (t <= cutoff)
+        # mask = (t >= 0) & (t <= cutoff)
+        mask = t >= 0
         t, s = t[mask], s[mask]
         if len(t) < 10:
             logger.warning("Пропуск %s: слишком короткий ряд", path.name)
