@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import List, Tuple
+from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -8,6 +9,30 @@ from plotly.subplots import make_subplots
 from . import DataSet, GHZ, NS, logger
 from .fit import _core_signal
 
+
+
+def _load_guess_curves(directory: Path, field_mT: int, temp_K: int
+                        ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Return theoretical frequency curves if guess file exists."""
+    path_H = directory / f"H_{field_mT}.npy"
+    path_T = directory / f"T_{temp_K}.npy"
+    if path_H.exists():
+        path = path_H
+    elif path_T.exists():
+        path = path_T
+    else:
+        return None
+    try:
+        arr = np.load(path)
+    except Exception as exc:
+        logger.warning("Не удалось загрузить %s: %s", path, exc)
+        return None
+    if arr.shape[0] < 3:
+        return None
+    axis = arr[0]
+    hf = arr[1]
+    lf = arr[2]
+    return axis, hf, lf
 
 
 def visualize_stacked(
@@ -79,6 +104,16 @@ def visualize_stacked(
     freq_vs_T = {H: sorted(v) for H, v in freq_vs_T.items() if len(v) >= 2}
     amp_vs_H = {T: sorted(v) for T, v in amp_vs_H.items() if len(v) >= 2}
     amp_vs_T = {H: sorted(v) for H, v in amp_vs_T.items() if len(v) >= 2}
+
+    # теоретические кривые из файлов первого приближения
+    theory_curves = None
+    first_ds = triples_sorted[0][0]
+    if first_ds.root:
+        theory_curves = _load_guess_curves(
+            first_ds.root,
+            first_ds.field_mT,
+            first_ds.temp_K,
+        )
 
     specs = [
         [
@@ -294,6 +329,28 @@ def visualize_stacked(
         fig.update_xaxes(title_text="H (mT)", row=2, col=4)
     fig.update_yaxes(title_text="f (GHz)", row=1, col=4)
     fig.update_yaxes(title_text="amp", row=2, col=4)
+
+    if theory_curves is not None:
+        axis, hf_th, lf_th = theory_curves
+        var_vals = [key_func(ds_lf) for ds_lf, _ in triples_sorted]
+        lo, hi = min(var_vals), max(var_vals)
+        mask = (axis >= lo) & (axis <= hi)
+        axis = axis[mask]
+        hf_th = hf_th[mask]
+        lf_th = lf_th[mask]
+        col_idx = 4
+        fig.add_trace(
+            go.Scatter(x=axis, y=lf_th, mode="lines",
+                       line=dict(color="red", dash="dot"),
+                       name="LF theory"),
+            row=1, col=col_idx,
+        )
+        fig.add_trace(
+            go.Scatter(x=axis, y=hf_th, mode="lines",
+                       line=dict(color="blue", dash="dot"),
+                       name="HF theory"),
+            row=1, col=col_idx,
+        )
 
     spectra_HF: list[tuple[np.ndarray, np.ndarray, str]] = []
     spectra_LF: list[tuple[np.ndarray, np.ndarray, str]] = []
@@ -602,6 +659,15 @@ def visualize_without_spectra(
     err_vs_H = {T: sorted(v) for T, v in err_vs_H.items() if len(v) >= 2}
     err_vs_T = {H: sorted(v) for H, v in err_vs_T.items() if len(v) >= 2}
 
+    theory_curves = None
+    first_ds = triples_sorted[0][0]
+    if first_ds.root:
+        theory_curves = _load_guess_curves(
+            first_ds.root,
+            first_ds.field_mT,
+            first_ds.temp_K,
+        )
+
     specs = [[{"type": "xy", "rowspan": 2}, {"type": "xy", "rowspan": 2}, {"type": "xy"}], [None, None, None]]
 
     if varying == "T":
@@ -816,6 +882,28 @@ def visualize_without_spectra(
             )
         fig.update_xaxes(title_text="H (mT)", row=1, col=3)
     fig.update_yaxes(title_text="f (GHz)", row=1, col=3)
+
+    if theory_curves is not None:
+        axis, hf_th, lf_th = theory_curves
+        var_vals = [key_func(ds_lf) for ds_lf, _ in triples_sorted]
+        lo, hi = min(var_vals), max(var_vals)
+        mask = (axis >= lo) & (axis <= hi)
+        axis = axis[mask]
+        hf_th = hf_th[mask]
+        lf_th = lf_th[mask]
+        col_idx = 3
+        fig.add_trace(
+            go.Scatter(x=axis, y=lf_th, mode="lines",
+                       line=dict(color="red", dash="dot"),
+                       name="LF theory"),
+            row=1, col=col_idx,
+        )
+        fig.add_trace(
+            go.Scatter(x=axis, y=hf_th, mode="lines",
+                       line=dict(color="blue", dash="dot"),
+                       name="HF theory"),
+            row=1, col=col_idx,
+        )
 
     fig.update_layout(
         showlegend=False,
