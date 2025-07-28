@@ -67,7 +67,7 @@ def main(data_dir: str = '.', *, return_datasets: bool = False,
             except Exception as e:
                 print(f"Ошибка обработки {key}: {e}")
     if do_plot and triples:
-        visualize_without_spectra(triples)
+        visualize_stacked(triples)
     out_excel = Path(excel_path) if excel_path else None
     export_freq_tables(triples, root, outfile=out_excel)
     return triples if return_datasets else None
