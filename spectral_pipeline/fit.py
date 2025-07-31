@@ -66,6 +66,7 @@ def _fft_spectrum(sig: np.ndarray, fs: float, *, window_name: str = "hamming",
                   df_target_GHz: float = 0.1) -> tuple[np.ndarray, np.ndarray]:
     """Амплитудный спектр (ASD) сигнала."""
     N = sig.size
+    sig = sig - sig.mean()
     if window_name:
         win = get_window(window_name, N)
         sig = sig * win
