@@ -599,10 +599,13 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             if abs(old_f - new_freq_hz) < 20e6:
                 return
         target_list.append((new_freq_hz, None))
-    def _dedup_candidates(candidates: list[tuple[float, Optional[float]]], label: str) -> list[tuple[float, Optional[float]]]:
-        unique: dict[float, tuple[float, Optional[float]]] = {}
+    def _dedup_candidates(
+        candidates: list[tuple[float, Optional[float]]],
+        label: str,
+    ) -> list[tuple[float, Optional[float]]]:
+        unique: dict[tuple[float, Optional[float]], tuple[float, Optional[float]]] = {}
         for f, z in candidates:
-            key = round(f / GHZ, 3)
+            key = (round(f / GHZ, 3), None if z is None else round(z, 3))
             if key not in unique:
                 unique[key] = (f, z)
         removed = len(candidates) - len(unique)
