@@ -677,6 +677,16 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         for f2, z2 in hf_cand:
             if (f1, f2) in seen:
                 continue
+            if freq_bounds is not None:
+                (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
+                if not (f1_lo <= f1 <= f1_hi and f2_lo <= f2 <= f2_hi):
+                    logger.debug(
+                        "Комбинация вне freq_bounds: f1=%.3f ГГц, f2=%.3f ГГц",
+                        f1 / GHZ,
+                        f2 / GHZ,
+                    )
+                    seen.add((f1, f2))
+                    continue
             ds_lf.f1_init, ds_lf.zeta1 = f1, z1
             ds_hf.f2_init, ds_hf.zeta2 = f2, z2
             try:
@@ -702,6 +712,16 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             for f2, z2 in hf_cand:
                 if (f1, f2) in seen:
                     continue
+                if freq_bounds is not None:
+                    (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
+                    if not (f1_lo <= f1 <= f1_hi and f2_lo <= f2 <= f2_hi):
+                        logger.debug(
+                            "Комбинация вне freq_bounds: f1=%.3f ГГц, f2=%.3f ГГц",
+                            f1 / GHZ,
+                            f2 / GHZ,
+                        )
+                        seen.add((f1, f2))
+                        continue
                 ds_lf.f1_init, ds_lf.zeta1 = f1, z1
                 ds_hf.f2_init, ds_hf.zeta2 = f2, z2
                 try:
