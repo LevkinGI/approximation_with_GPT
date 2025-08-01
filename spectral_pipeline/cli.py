@@ -69,20 +69,25 @@ def main(data_dir: str = '.', *, return_datasets: bool = False,
     for ds in datasets:
         key = (ds.field_mT, ds.temp_K)
         grouped.setdefault(key, {})[ds.tag] = ds
-    triples = []
+    triples: List[Tuple[DataSet, DataSet]] = []
+    success_count = 0
     for key, pair in grouped.items():
         if 'LF' in pair and 'HF' in pair:
             ds_lf, ds_hf = pair['LF'], pair['HF']
             try:
-                process_pair(ds_lf, ds_hf)
-                triples.append((ds_lf, ds_hf))
+                fit = process_pair(ds_lf, ds_hf)
             except Exception as e:
                 logger.error("Ошибка обработки %s: %s", key, e)
-    logger.info("Успешно обработано пар: %d", len(triples))
-    if do_plot and triples:
+            else:
+                if fit is not None:
+                    success_count += 1
+                    triples.append((ds_lf, ds_hf))
+    logger.info("Успешно аппроксимировано пар: %d", success_count)
+    if do_plot and success_count:
         visualize_stacked(triples)
     out_excel = Path(excel_path) if excel_path else None
-    export_freq_tables(triples, root, outfile=out_excel)
+    if success_count:
+        export_freq_tables(triples, root, outfile=out_excel)
     logger.info("Завершение обработки каталога %s", root)
     return triples if return_datasets else None
 
