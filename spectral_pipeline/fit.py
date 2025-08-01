@@ -98,11 +98,23 @@ def _peak_in_band(freqs: np.ndarray, amps: np.ndarray, fmin_GHz: float,
     std = np.std(a_band)
     df = f_band[1] - f_band[0]
     dist = int(0.3 * GHZ / df)
-    for k in (0.3, 0.2, 0.1, 0.05):
+
+    for k in (0.3, 0.05):
         thr = med + k * std
         prom = k * std
-        pk, props = find_peaks(a_band, height=thr, prominence=prom,
-                               distance=max(1, dist), plateau_size=True)
+        pk, props = find_peaks(
+            a_band,
+            height=thr,
+            prominence=prom,
+            distance=max(1, dist),
+            plateau_size=True,
+        )
+        logger.debug(
+            "find_peaks: height>=%.3g, prom>=%.3g -> %d peaks",
+            thr,
+            prom,
+            pk.size,
+        )
         if pk.size:
             heights = props.get("peak_heights")
             idx = int(np.argmax(heights))
@@ -112,18 +124,18 @@ def _peak_in_band(freqs: np.ndarray, amps: np.ndarray, fmin_GHz: float,
                 best_idx = (left + right) // 2
             else:
                 best_idx = pk[idx]
-            return float(f_band[best_idx])
-    low_thr = med + 0.05 * std
-    above = a_band >= low_thr
-    if above.any():
-        starts = np.where(np.diff(np.r_[0, above.astype(int)]) == 1)[0]
-        ends = np.where(np.diff(np.r_[above.astype(int), 0]) == -1)[0]
-        if starts.size and ends.size:
-            seg_idx = np.argmax([a_band[s:e].max() for s, e in zip(starts, ends)])
-            s, e = starts[seg_idx], ends[seg_idx]
-            best_idx = (s + e - 1) // 2
-            return float(f_band[best_idx])
-    return None
+            f_best = float(f_band[best_idx])
+            logger.debug("selected peak at %.3f ГГц", f_best / GHZ)
+            return f_best
+
+    max_idx = int(np.argmax(a_band))
+    f_max = float(f_band[max_idx])
+    logger.debug(
+        "no peaks found, fallback to max: f=%.3f ГГц, amp=%.3g",
+        f_max / GHZ,
+        a_band[max_idx],
+    )
+    return f_max
 
 
 def _crop_signal(t: NDArray, s: NDArray, tag: str):
