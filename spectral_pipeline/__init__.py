@@ -6,11 +6,26 @@ from typing import Literal, Optional
 import numpy as np
 from numpy.typing import NDArray
 import logging
+from logging.handlers import RotatingFileHandler
 import math
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("spectral_pipeline")
-logger.setLevel(logging.INFO)
+if not logger.handlers:
+    log_dir = Path(__file__).resolve().parent.parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / "pipeline.log"
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    stream_h = logging.StreamHandler()
+    stream_h.setFormatter(fmt)
+    file_h = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
+    file_h.setFormatter(fmt)
+    logger.addHandler(stream_h)
+    logger.addHandler(file_h)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 GHZ = 1e9
 NS = 1e-9

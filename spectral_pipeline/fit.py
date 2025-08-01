@@ -213,6 +213,8 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     f1_init = ds_lf.f1_init
     f2_init = ds_hf.f2_init
+    logger.debug(
+        "Начальные оценки: f1=%.3f ГГц, f2=%.3f ГГц", f1_init/GHZ, f2_init/GHZ)
 
     _, phi1_init, A1_init, tau1_init = _single_sine_refine(t_lf, y_lf, f1_init)
     if ds_lf.zeta1 is None:
@@ -305,6 +307,9 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     (k_lf, k_hf, C_lf, C_hf,
      A1, A2, tau1, tau2,
      f1_fin, f2_fin, phi1_fin, phi2_fin) = p
+    logger.debug(
+        "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
+        f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
 
     return FittingResult(
         f1=f1_fin,
@@ -325,6 +330,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
 
 def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
+    logger.info("Обработка пары T=%d K, H=%d mT", ds_lf.temp_K, ds_lf.field_mT)
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
     t_lf, y_lf = _crop_signal(ds_lf.ts.t, ds_lf.ts.s, tag="LF")
     t_hf, y_hf = _crop_signal(ds_hf.ts.t, ds_hf.ts.s, tag="HF")
@@ -368,11 +374,15 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
 
     if guess is not None:
         f1_guess, f2_guess = guess
+        logger.info(
+            "(%d, %d): использованы предварительные оценки f1=%.3f ГГц, f2=%.3f ГГц",
+            ds_lf.temp_K, ds_lf.field_mT, f1_guess/GHZ, f2_guess/GHZ)
         lf_cand = [(f1_guess, None)]
         hf_cand = [(f2_guess, None)]
         freq_bounds = ((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
                        (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
     else:
+        logger.info("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
     fs_hf = 1.0 / float(np.mean(np.diff(t_hf)))
     fs_lf = 1.0 / float(np.mean(np.diff(t_lf)))
@@ -434,7 +444,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             ds_hf.f2_init, ds_hf.zeta2 = f2, z2
             try:
                 fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s", f1/GHZ, f2/GHZ, exc)
                 continue
             if cost < best_cost:
                 best_cost = cost
@@ -456,5 +467,9 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
                     best_fit = fit
 
     if best_fit is None:
+        logger.error("(%d, %d): ни одна комбинация не аппроксимировалась", ds_lf.temp_K, ds_lf.field_mT)
         raise RuntimeError("Ни одна комбинация не аппроксимировалась")
     ds_lf.fit = ds_hf.fit = best_fit
+    logger.info(
+        "(%d, %d): аппроксимация успешна f1=%.3f ГГц, f2=%.3f ГГц",
+        ds_lf.temp_K, ds_lf.field_mT, best_fit.f1/GHZ, best_fit.f2/GHZ)
