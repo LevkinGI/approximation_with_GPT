@@ -95,114 +95,141 @@ def _peak_in_band(
     fmin_GHz: float,
     fmax_GHz: float,
     *,
-    _expanded: bool = False,
+    max_expansions: int = 1,
+    expansion_step_GHz: float = 2.0,
 ) -> float | None:
     """Return peak frequency inside band or ``None`` if absent.
 
     If the strongest point lies closer than 5 % of the band width to a
     boundary, the band is considered unreliable. The search is then repeated
-    once with an expanded range of ±2 ГГц.
+    with an expanded range. Expansion step and maximum number of expansions
+    are configurable via ``expansion_step_GHz`` and ``max_expansions``.
     """
-    logger.info("FFT peak search: %.1f–%.1f ГГц", fmin_GHz, fmax_GHz)
-    mask = (freqs >= fmin_GHz * GHZ) & (freqs <= fmax_GHz * GHZ)
-    if not mask.any():
-        logger.info(
-            "No data in range %.1f–%.1f ГГц", fmin_GHz, fmax_GHz,
-        )
-        return None
-    f_band = freqs[mask]
-    a_band = amps[mask]
-    if a_band.size < 3:
-        logger.info(
-            "Not enough points in range %.1f–%.1f ГГц", fmin_GHz, fmax_GHz,
-        )
-        return None
-    med = np.median(a_band)
-    std = np.std(a_band)
-    df = f_band[1] - f_band[0]
-    dist = int(0.3 * GHZ / df)
 
-    for k in (0.3, 0.05):
-        thr = med + k * std
-        prom = k * std
-        pk, props = find_peaks(
-            a_band,
-            height=thr,
-            prominence=prom,
-            distance=max(1, dist),
-            plateau_size=True,
-        )
-        logger.debug(
-            "find_peaks: height>=%.3g, prom>=%.3g -> %d peaks",
-            thr,
-            prom,
-            pk.size,
-        )
-        if pk.size:
-            heights = props.get("peak_heights")
-            idx = int(np.argmax(heights))
-            if props.get("plateau_sizes", np.zeros(len(pk)))[idx] > 1:
-                left = int(props["left_edges"][idx])
-                right = int(props["right_edges"][idx]) - 1
-                best_idx = (left + right) // 2
-            else:
-                best_idx = pk[idx]
-            f_best = float(f_band[best_idx])
+    expansions = 0
+    while True:
+        logger.info("FFT peak search: %.1f–%.1f ГГц", fmin_GHz, fmax_GHz)
+        mask = (freqs >= fmin_GHz * GHZ) & (freqs <= fmax_GHz * GHZ)
+        if not mask.any():
+            logger.info(
+                "No data in range %.1f–%.1f ГГц", fmin_GHz, fmax_GHz,
+            )
+            logger.info(
+                "Total expansions: %d, final range %.1f–%.1f ГГц",
+                expansions,
+                fmin_GHz,
+                fmax_GHz,
+            )
+            return None
+        f_band = freqs[mask]
+        a_band = amps[mask]
+        if a_band.size < 3:
+            logger.info(
+                "Not enough points in range %.1f–%.1f ГГц", fmin_GHz, fmax_GHz,
+            )
+            logger.info(
+                "Total expansions: %d, final range %.1f–%.1f ГГц",
+                expansions,
+                fmin_GHz,
+                fmax_GHz,
+            )
+            return None
+        med = np.median(a_band)
+        std = np.std(a_band)
+        df = f_band[1] - f_band[0]
+        dist = int(0.3 * GHZ / df)
+
+        found_peak = False
+        for k in (0.3, 0.05):
+            thr = med + k * std
+            prom = k * std
+            pk, props = find_peaks(
+                a_band,
+                height=thr,
+                prominence=prom,
+                distance=max(1, dist),
+                plateau_size=True,
+            )
+            logger.debug(
+                "find_peaks: height>=%.3g, prom>=%.3g -> %d peaks",
+                thr,
+                prom,
+                pk.size,
+            )
+            if pk.size:
+                heights = props.get("peak_heights")
+                idx = int(np.argmax(heights))
+                if props.get("plateau_sizes", np.zeros(len(pk)))[idx] > 1:
+                    left = int(props["left_edges"][idx])
+                    right = int(props["right_edges"][idx]) - 1
+                    best_idx = (left + right) // 2
+                else:
+                    best_idx = pk[idx]
+                f_best = float(f_band[best_idx])
+                found_peak = True
+                break
+
+        if not found_peak:
+            max_idx = int(np.argmax(a_band))
+            f_best = float(f_band[max_idx])
+            logger.debug(
+                "no peaks found, fallback to max: f=%.3f ГГц, amp=%.3g",
+                f_best / GHZ,
+                a_band[max_idx],
+            )
+
+        band_width = f_band[-1] - f_band[0]
+        margin = 0.05 * band_width
+        if band_width > 0 and (
+            (f_best - f_band[0] < margin) or (f_band[-1] - f_best < margin)
+        ):
+            if expansions < max_expansions:
+                expansions += 1
+                fmin_GHz -= expansion_step_GHz
+                fmax_GHz += expansion_step_GHz
+                logger.info(
+                    "Peak near boundary, expanding search to %.1f–%.1f ГГц (attempt %d/%d)",
+                    fmin_GHz,
+                    fmax_GHz,
+                    expansions,
+                    max_expansions,
+                )
+                continue
+            logger.info(
+                "Peak near boundary even after %d expansions: %.1f–%.1f ГГц",
+                expansions,
+                fmin_GHz,
+                fmax_GHz,
+            )
+            logger.info(
+                "Total expansions: %d, final range %.1f–%.1f ГГц",
+                expansions,
+                fmin_GHz,
+                fmax_GHz,
+            )
+            return None
+
+        if found_peak:
             logger.info(
                 "Peak found at %.3f ГГц within %.1f–%.1f ГГц",
                 f_best / GHZ,
                 fmin_GHz,
                 fmax_GHz,
             )
-            return f_best
-
-    max_idx = int(np.argmax(a_band))
-    f_max = float(f_band[max_idx])
-    band_width = f_band[-1] - f_band[0]
-    margin = 0.05 * band_width
-    if band_width > 0 and (
-        (f_max - f_band[0] < margin) or (f_band[-1] - f_max < margin)
-    ):
-        if not _expanded:
-            new_min = fmin_GHz - 2.0
-            new_max = fmax_GHz + 2.0
+        else:
             logger.info(
-                "Peak near boundary, expanding search to %.1f–%.1f ГГц",
-                new_min,
-                new_max,
+                "Selected fallback peak %.3f ГГц within %.1f–%.1f ГГц",
+                f_best / GHZ,
+                fmin_GHz,
+                fmax_GHz,
             )
-            return _peak_in_band(freqs, amps, new_min, new_max, _expanded=True)
         logger.info(
-            "Peak near boundary even after expansion: %.1f–%.1f ГГц",
+            "Total expansions: %d, final range %.1f–%.1f ГГц",
+            expansions,
             fmin_GHz,
             fmax_GHz,
         )
-        return None
-
-    logger.debug(
-        "no peaks found, fallback to max: f=%.3f ГГц, amp=%.3g",
-        f_max / GHZ,
-        a_band[max_idx],
-    )
-    logger.info(
-        "Selected fallback peak %.3f ГГц within %.1f–%.1f ГГц",
-        f_max / GHZ,
-        fmin_GHz,
-        fmax_GHz,
-    )
-    return f_max
-
-
-def _crop_signal(t: NDArray, s: NDArray, tag: str):
-    pk = int(np.argmax(s))
-    minima = np.where(
-        (np.diff(np.signbit(np.diff(s))) > 0) & (np.arange(len(s))[1:-1] > pk)
-    )[0]
-    st = minima[0] + 1 if minima.size else pk + 1
-    # right-side cropping is temporarily disabled
-    # cutoff = 0.9e-9 if tag == "LF" else 0.12e-9
-    # end = st + np.searchsorted(t[st:], cutoff, "right")
-    return t[st:], s[st:]
+        return f_best
 
 
 def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, float],
@@ -328,8 +355,8 @@ def _single_sine_refine(t: NDArray, y: NDArray, f0: float
 
 def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
              freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
-    t_lf, y_lf = _crop_signal(ds_lf.ts.t, ds_lf.ts.s, tag="LF")
-    t_hf, y_hf = _crop_signal(ds_hf.ts.t, ds_hf.ts.s, tag="HF")
+    t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
+    t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
     def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
         if t.size == 0:
@@ -468,8 +495,8 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     logger.info("Обработка пары T=%d K, H=%d mT", ds_lf.temp_K, ds_lf.field_mT)
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
-    t_lf, y_lf = _crop_signal(ds_lf.ts.t, ds_lf.ts.s, tag="LF")
-    t_hf, y_hf = _crop_signal(ds_hf.ts.t, ds_hf.ts.s, tag="HF")
+    t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
+    t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
     def _search_candidates() -> tuple[list[tuple[float, Optional[float]]],
                                       list[tuple[float, Optional[float]]],

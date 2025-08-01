@@ -31,11 +31,24 @@ def load_records(root: Path) -> List[DataSet]:
             continue
         x, s = data[:, 0], data[:, 1]
         x0 = x[np.argmax(s)]
-        t = 2.0 * (x - x0) / C_M_S  # секунды
-        cutoff = 0.4e-9 if tag == "LF" else 0.1e-9
-        # mask = (t >= 0) & (t <= cutoff)
-        mask = t >= 0
-        t, s = t[mask], s[mask]
+        t_all = 2.0 * (x - x0) / C_M_S  # секунды
+
+        # Обрезаем сигнал сразу после первого минимума справа от пика
+        pk = int(np.argmax(s))
+        minima = np.where(
+            (np.diff(np.signbit(np.diff(s))) > 0)
+            & (np.arange(len(s))[1:-1] > pk)
+        )[0]
+        st = minima[0] + 1 if minima.size else pk + 1
+        t = t_all[st:]
+        s = s[st:]
+
+        # Для LF дополнительно ограничиваем длительность 0.7 нс
+        if tag == "LF":
+            cutoff = 0.7e-9
+            end = np.searchsorted(t, t[0] + cutoff, "right")
+            t, s = t[:end], s[:end]
+
         if len(t) < 10:
             logger.warning("Пропуск %s: слишком короткий ряд", path.name)
             continue
