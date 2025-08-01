@@ -9,18 +9,19 @@ import logging
 from logging.handlers import RotatingFileHandler
 import math
 
+log_dir = Path(__file__).resolve().parent.parent / "logs"
+log_dir.mkdir(exist_ok=True)
+LOG_PATH = log_dir / "pipeline.log"
+
 logger = logging.getLogger("spectral_pipeline")
 if not logger.handlers:
-    log_dir = Path(__file__).resolve().parent.parent / "logs"
-    log_dir.mkdir(exist_ok=True)
-    log_path = log_dir / "pipeline.log"
     fmt = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     stream_h = logging.StreamHandler()
     stream_h.setFormatter(fmt)
-    file_h = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
+    file_h = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
     file_h.setFormatter(fmt)
     logger.addHandler(stream_h)
     logger.addHandler(file_h)
@@ -101,6 +102,6 @@ class DataSet:
 
 __all__ = [
     "DataSet", "FittingResult", "RecordMeta", "TimeSeries",
-    "GHZ", "NS", "PI", "FREQ_TAG", "logger",
+    "GHZ", "NS", "PI", "FREQ_TAG", "logger", "LOG_PATH",
     "C_M_S", "LF_BAND", "HF_BAND",
 ]

@@ -6,7 +6,7 @@ import logging
 import pandas as pd
 from openpyxl.styles import Border, Side, Alignment
 
-from . import DataSet, GHZ, logger
+from . import DataSet, GHZ, logger, LOG_PATH
 from .io import load_records
 from .fit import process_pair
 from .plotting import visualize_without_spectra, visualize_stacked
@@ -57,6 +57,7 @@ def main(data_dir: str = '.', *, return_datasets: bool = False,
     logger.setLevel(level)
     for h in logger.handlers:
         h.setLevel(level)
+    logger.info("Лог-файл: %s", LOG_PATH)
     root = Path(data_dir).resolve()
     logger.info("Начало обработки каталога %s", root)
     datasets = load_records(root)

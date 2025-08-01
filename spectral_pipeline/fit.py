@@ -141,16 +141,20 @@ def _crop_signal(t: NDArray, s: NDArray, tag: str):
 def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, float],
                    f_rough: float, avoid: float | None = None, df_min: float = 0.5 * GHZ,
                    order_burg: int = 8) -> float | None:
+    logger.debug(
+        "Fallback search: range=[%.1f, %.1f] ГГц, avoid=%s", f_range[0]/GHZ,
+        f_range[1]/GHZ, None if avoid is None else f"{avoid/GHZ:.3f}")
     try:
         ar, _ = burg(y - y.mean(), order=order_burg)
         roots = np.roots(np.r_[1, -ar])
         root = roots[np.argmax(np.abs(roots))]
         f_burg = abs(np.angle(root)) * fs / (2 * np.pi)
+        logger.debug("Burg estimate: %.3f ГГц", f_burg / GHZ)
         if f_range[0] <= f_burg <= f_range[1] and \
            (avoid is None or abs(f_burg - avoid) >= df_min):
             return float(f_burg)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Burg failed: %s", exc)
     f, P = welch(y, fs=fs, nperseg=min(256, len(y)//2),
                  detrend='constant', scaling='density')
     mask = (f >= f_range[0]) & (f <= f_range[1])
@@ -158,7 +162,9 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         mask &= np.abs(f - avoid) >= df_min
     if not np.any(mask):
         return None
-    return float(f[mask][np.argmax(P[mask])])
+    f_sel = float(f[mask][np.argmax(P[mask])])
+    logger.debug("Welch estimate: %.3f ГГц", f_sel / GHZ)
+    return f_sel
 
 
 def _top2_nearest(freqs: NDArray, zetas: NDArray, f0: float
@@ -188,6 +194,8 @@ def _esprit_freqs_and_decay(r: NDArray, fs: float, p: int = 6
     dt = 1.0 / fs
     f = np.abs(np.angle(lam)) / (2 * np.pi * dt)
     zeta = -np.log(np.abs(lam)) / dt
+    logger.debug("ESPRIT raw freqs: %s", np.round(f / GHZ, 3))
+    logger.debug("ESPRIT raw zeta: %s", np.round(zeta, 3))
     return f, zeta
 
 
@@ -367,6 +375,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
         proto_lf = A1 * np.exp(-t_hf / tau1) * np.cos(2 * np.pi * f1_rough * t_hf + phi1)
         residual = y_hf - proto_lf
         f2_rough, _, _, _ = _single_sine_refine(t_hf, residual, f0=40 * GHZ)
+        logger.debug("Rough estimates: f1=%.3f ГГц, f2=%.3f ГГц",
+                     f1_rough/GHZ, f2_rough/GHZ)
         spec_hf = y_hf - np.mean(y_hf)
         f_all_hf, zeta_all_hf = _esprit_freqs_and_decay(spec_hf, ds_hf.ts.meta.fs)
         mask_hf = (
@@ -375,6 +385,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             & (f_all_hf <= HF_BAND[1])
             & (np.abs(f_all_hf - f2_rough) <= 5 * GHZ)
         )
+        logger.debug("ESPRIT HF filtered: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
         if np.any(mask_hf):
             hf_c = list(zip(f_all_hf[mask_hf], zeta_all_hf[mask_hf]))
         else:
@@ -383,6 +394,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
             hf_c = [(f2_fallback, None)]
+        logger.debug("HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_c])
         spec_lf = y_lf - np.mean(y_lf)
         f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
         mask_lf = (
@@ -391,6 +403,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             & (f_all_lf <= LF_BAND[1])
             & (np.abs(f_all_lf - f1_rough) <= 5 * GHZ)
         )
+        logger.debug("ESPRIT LF filtered: %s", np.round(f_all_lf[mask_lf] / GHZ, 3))
         if np.any(mask_lf):
             lf_c = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_rough)
         else:
@@ -401,6 +414,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
             lf_c = [(f1_fallback, None)]
+        logger.debug("LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_c])
         return lf_c, hf_c, None
 
     guess = None
