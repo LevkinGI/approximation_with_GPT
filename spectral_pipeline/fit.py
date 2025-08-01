@@ -622,13 +622,26 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
     logger.info("Final LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_cand])
     logger.info("Final HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_cand])
 
-    seen: set[tuple[float, float]] = set()
+    # Track tried combinations of frequency and damping to avoid skipping
+    # candidates that share a frequency but differ in damping.
+    seen: set[tuple[
+        float,
+        Optional[float],
+        float,
+        Optional[float],
+    ]] = set()
     best_cost = np.inf
     best_fit = None
     filtered_pairs = 0
     for f1, z1 in lf_cand:
         for f2, z2 in hf_cand:
-            if (f1, f2) in seen:
+            key = (
+                round(f1 / GHZ, 3),
+                None if z1 is None else round(z1, 3),
+                round(f2 / GHZ, 3),
+                None if z2 is None else round(z2, 3),
+            )
+            if key in seen:
                 continue
             if not (LF_BAND[0] <= f1 <= LF_BAND[1]) or not (HF_BAND[0] <= f2 <= HF_BAND[1]):
                 filtered_pairs += 1
@@ -649,7 +662,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
                     best_cost = cost
                     best_fit = fit
             finally:
-                seen.add((f1, f2))
+                seen.add(key)
     if best_fit is None and guess is not None:
         logger.warning("(%d, %d): не удалось аппроксимировать с первым приближением, поиск альтернативы", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
@@ -658,7 +671,13 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
         best_cost = np.inf
         for f1, z1 in lf_cand:
             for f2, z2 in hf_cand:
-                if (f1, f2) in seen:
+                key = (
+                    round(f1 / GHZ, 3),
+                    None if z1 is None else round(z1, 3),
+                    round(f2 / GHZ, 3),
+                    None if z2 is None else round(z2, 3),
+                )
+                if key in seen:
                     continue
                 if not (LF_BAND[0] <= f1 <= LF_BAND[1]) or not (HF_BAND[0] <= f2 <= HF_BAND[1]):
                     filtered_pairs += 1
@@ -679,7 +698,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
                         best_cost = cost
                         best_fit = fit
                 finally:
-                    seen.add((f1, f2))
+                    seen.add(key)
 
     logger.info("Filtered %d candidate pairs out of band", filtered_pairs)
 
