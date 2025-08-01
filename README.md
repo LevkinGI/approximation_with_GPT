@@ -18,6 +18,8 @@ python find_freqs_and_visualize.py data
 настроить опцией `--log-level`, например:
 
 ```bash
+python find_freqs_and_visualize.py data --log-level=DEBUG
+# или
 python -m spectral_pipeline.cli data --log-level=DEBUG
 ```
 При значении `DEBUG` выводятся дополнительные сведения о работе ESPRIT и
