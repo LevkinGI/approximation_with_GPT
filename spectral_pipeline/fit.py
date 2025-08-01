@@ -707,6 +707,32 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         logger.warning(
             f"({ds_lf.temp_K}, {ds_lf.field_mT}): в полосе {range_hf} ГГц пиков не найдено")
 
+    # Occasionally the automatic FFT search returns a spurious HF peak
+    # far away from the LF component, especially when the true HF tone
+    # is weak.  If the ratio between the detected HF and LF peaks lies
+    # outside the physically plausible range (roughly 0.8–5× of the LF
+    # frequency) we perform a secondary search constrained by this
+    # ratio.  This prevents the algorithm from jumping to very high
+    # frequencies when the spectrum is dominated by noise.
+    if f1_hz is not None and f2_hz is not None:
+        ratio = f2_hz / f1_hz
+        if ratio > 5.0 or ratio < 0.8:
+            fmin = max(HF_BAND[0] / GHZ, (f1_hz / GHZ) * 0.8)
+            fmax = min(HF_BAND[1] / GHZ, (f1_hz / GHZ) * 5.0)
+            logger.info(
+                "HF peak %.1f ГГц (ratio %.2f) outside expected bounds;"
+                " refining search to %.1f–%.1f ГГц",
+                f2_hz / GHZ,
+                ratio,
+                fmin,
+                fmax,
+            )
+            f2_alt = _peak_in_band(freqs_fft, amps_fft, fmin, fmax)
+            if f2_alt is not None:
+                f2_hz = f2_alt
+                logger.info(
+                    "Refined HF peak at %.1f ГГц", f2_hz / GHZ)
+
     def _append_unique(target_list, new_freq_hz):
         if new_freq_hz is None:
             return
