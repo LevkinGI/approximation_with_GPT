@@ -232,19 +232,6 @@ def _peak_in_band(
         return f_best
 
 
-def _crop_signal(t: NDArray, s: NDArray, tag: str):
-    pk = int(np.argmax(s))
-    minima = np.where(
-        (np.diff(np.signbit(np.diff(s))) > 0) & (np.arange(len(s))[1:-1] > pk)
-    )[0]
-    st = minima[0] + 1 if minima.size else pk + 1
-    if tag == "LF":
-        cutoff = 0.7e-9
-        end = st + np.searchsorted(t[st:], t[st] + cutoff, "right")
-        return t[st:end], s[st:end]
-    return t[st:], s[st:]
-
-
 def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, float],
                    f_rough: float, avoid: float | None = None, df_min: float = 0.5 * GHZ,
                    order_burg: int = 8, n_avg_fft: int = 4) -> float | None:
@@ -368,8 +355,8 @@ def _single_sine_refine(t: NDArray, y: NDArray, f0: float
 
 def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
              freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
-    t_lf, y_lf = _crop_signal(ds_lf.ts.t, ds_lf.ts.s, tag="LF")
-    t_hf, y_hf = _crop_signal(ds_hf.ts.t, ds_hf.ts.s, tag="HF")
+    t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
+    t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
     def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
         if t.size == 0:
@@ -508,8 +495,8 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     logger.info("Обработка пары T=%d K, H=%d mT", ds_lf.temp_K, ds_lf.field_mT)
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
-    t_lf, y_lf = _crop_signal(ds_lf.ts.t, ds_lf.ts.s, tag="LF")
-    t_hf, y_hf = _crop_signal(ds_hf.ts.t, ds_hf.ts.s, tag="HF")
+    t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
+    t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
     def _search_candidates() -> tuple[list[tuple[float, Optional[float]]],
                                       list[tuple[float, Optional[float]]],
