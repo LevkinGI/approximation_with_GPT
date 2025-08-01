@@ -599,9 +599,22 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             if abs(old_f - new_freq_hz) < 20e6:
                 return
         target_list.append((new_freq_hz, None))
+    def _dedup_candidates(candidates: list[tuple[float, Optional[float]]], label: str) -> list[tuple[float, Optional[float]]]:
+        unique: dict[float, tuple[float, Optional[float]]] = {}
+        for f, z in candidates:
+            key = round(f / GHZ, 3)
+            if key not in unique:
+                unique[key] = (f, z)
+        removed = len(candidates) - len(unique)
+        if removed:
+            logger.info("%s dedup removed %d items", label, removed)
+        return list(unique.values())
 
     _append_unique(lf_cand, f1_hz)
     _append_unique(hf_cand, f2_hz)
+
+    lf_cand = _dedup_candidates(lf_cand, "LF candidates")
+    hf_cand = _dedup_candidates(hf_cand, "HF candidates")
 
     logger.info("Final LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_cand])
     logger.info("Final HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_cand])
@@ -609,9 +622,13 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
     seen: set[tuple[float, float]] = set()
     best_cost = np.inf
     best_fit = None
+    filtered_pairs = 0
     for f1, z1 in lf_cand:
         for f2, z2 in hf_cand:
             if (f1, f2) in seen:
+                continue
+            if not (LF_BAND[0] <= f1 <= LF_BAND[1]) or not (HF_BAND[0] <= f2 <= HF_BAND[1]):
+                filtered_pairs += 1
                 continue
             ds_lf.f1_init, ds_lf.zeta1 = f1, z1
             ds_hf.f2_init, ds_hf.zeta2 = f2, z2
@@ -633,10 +650,15 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
     if best_fit is None and guess is not None:
         logger.warning("(%d, %d): не удалось аппроксимировать с первым приближением, поиск альтернативы", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
+        lf_cand = _dedup_candidates(lf_cand, "LF candidates")
+        hf_cand = _dedup_candidates(hf_cand, "HF candidates")
         best_cost = np.inf
         for f1, z1 in lf_cand:
             for f2, z2 in hf_cand:
                 if (f1, f2) in seen:
+                    continue
+                if not (LF_BAND[0] <= f1 <= LF_BAND[1]) or not (HF_BAND[0] <= f2 <= HF_BAND[1]):
+                    filtered_pairs += 1
                     continue
                 ds_lf.f1_init, ds_lf.zeta1 = f1, z1
                 ds_hf.f2_init, ds_hf.zeta2 = f2, z2
@@ -655,6 +677,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
                         best_fit = fit
                 finally:
                     seen.add((f1, f2))
+
+    logger.info("Filtered %d candidate pairs out of band", filtered_pairs)
 
     if best_fit is None:
         logger.error("(%d, %d): ни одна комбинация не аппроксимировалась", ds_lf.temp_K, ds_lf.field_mT)
