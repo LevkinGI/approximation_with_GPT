@@ -402,11 +402,13 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             hf_c = list(zip(f_all_hf[mask_hf], zeta_all_hf[mask_hf]))
         else:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
-            f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, HF_BAND, f2_rough)
+            range_hf = (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ) if f2_rough is not None else HF_BAND
+            logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
+            f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_rough if f2_rough is not None else 0.0)
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
             hf_c = [(f2_fallback, None)]
-        logger.debug("HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_c])
+        logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_c])
         spec_lf = y_lf - np.mean(y_lf)
         f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
         mask_lf = (
@@ -420,13 +422,15 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             lf_c = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_rough)
         else:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
+            range_lf = (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ) if f1_rough is not None else LF_BAND
+            logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
             f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
-                                        LF_BAND, f1_rough,
+                                        range_lf, f1_rough if f1_rough is not None else 0.0,
                                         avoid=hf_c[0][0] if hf_c else None)
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
             lf_c = [(f1_fallback, None)]
-        logger.debug("LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_c])
+        logger.info("LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_c])
         return lf_c, hf_c, None
 
     guess = None
@@ -450,10 +454,13 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
         hf_cand = _top2_nearest(f_all_hf[mask_hf], zeta_all_hf[mask_hf], f2_guess) if np.any(mask_hf) else []
         if not hf_cand:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
-            f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, HF_BAND, f2_guess)
+            range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
+            logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
+            f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_guess)
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
             hf_cand = [(f2_fallback, None)]
+        logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_cand])
         spec_lf = y_lf - np.mean(y_lf)
         f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
         mask_lf = (
@@ -466,12 +473,15 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
         lf_cand = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_guess) if np.any(mask_lf) else []
         if not lf_cand:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
+            range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
+            logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
             f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
-                                        LF_BAND, f1_guess,
+                                        range_lf, f1_guess,
                                         avoid=hf_cand[0][0] if hf_cand else None)
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
             lf_cand = [(f1_fallback, None)]
+        logger.info("LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_cand])
         def _ensure_guess(cands, freq):
             for f, _ in cands:
                 if abs(f - freq) < 20e6:
@@ -479,8 +489,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             cands.append((freq, None))
         _ensure_guess(lf_cand, f1_guess)
         _ensure_guess(hf_cand, f2_guess)
-        logger.debug("LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_cand])
-        logger.debug("HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_cand])
+        logger.info("LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_cand])
+        logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_cand])
         freq_bounds = ((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
                        (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
     else:
@@ -537,6 +547,9 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
 
     _append_unique(lf_cand, f1_hz)
     _append_unique(hf_cand, f2_hz)
+
+    logger.info("Final LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_cand])
+    logger.info("Final HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_cand])
 
     best_cost = np.inf
     best_fit = None
