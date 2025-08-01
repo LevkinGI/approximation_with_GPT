@@ -93,13 +93,51 @@ def _peak_in_band(freqs: np.ndarray, amps: np.ndarray, fmin_GHz: float,
     f_band = freqs[mask]
     a_band = amps[mask]
     thr = np.median(a_band) + 0.3 * np.std(a_band)
+    prom = 0.3 * np.std(a_band)
     df = f_band[1] - f_band[0] if len(f_band) > 1 else 1 * GHZ
     dist = int(0.3 * GHZ / df)
-    pk, _ = find_peaks(a_band, height=thr, distance=max(1, dist))
+    pk, _ = find_peaks(
+        a_band,
+        height=thr,
+        prominence=prom,
+        distance=max(1, dist),
+    )
+    logger.debug(
+        "find_peaks height=%.3e prominence=%.3e -> %d peaks",
+        thr,
+        prom,
+        pk.size,
+    )
     if pk.size == 0:
-        return None
-    best_idx = pk[np.argmax(a_band[pk])]
-    return float(f_band[best_idx])
+        thr /= 2
+        prom /= 2
+        pk, _ = find_peaks(
+            a_band,
+            height=thr,
+            prominence=prom,
+            distance=max(1, dist),
+        )
+        logger.debug(
+            "retry find_peaks height=%.3e prominence=%.3e -> %d peaks",
+            thr,
+            prom,
+            pk.size,
+        )
+    if pk.size > 0:
+        best_idx = pk[np.argmax(a_band[pk])]
+        logger.debug(
+            "selected peak at %.3f GHz, amp %.3e",
+            f_band[best_idx] / GHZ,
+            a_band[best_idx],
+        )
+        return float(f_band[best_idx])
+    max_idx = int(np.argmax(a_band))
+    logger.debug(
+        "fallback max at %.3f GHz, amp %.3e",
+        f_band[max_idx] / GHZ,
+        a_band[max_idx],
+    )
+    return float(f_band[max_idx])
 
 
 def _crop_signal(t: NDArray, s: NDArray, tag: str):
