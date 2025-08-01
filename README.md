@@ -23,7 +23,8 @@ python find_freqs_and_visualize.py data --log-level=INFO
 python -m spectral_pipeline.cli data --log-level=INFO
 ```
 При уровне `DEBUG` выводятся дополнительные сведения о работе ESPRIT и
-fallback-алгоритма.
+fallback-алгоритма. Получившийся файл `logs/pipeline.log` можно отправлять для
+диагностики и анализа результатов.
 
 ## Тесты
 ```bash
