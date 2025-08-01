@@ -52,7 +52,7 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
 
 def main(data_dir: str = '.', *, return_datasets: bool = False,
          do_plot: bool = True, excel_path: str | None = None,
-         log_level: str = "INFO"):
+         log_level: str = "DEBUG"):
     level = getattr(logging, log_level.upper(), logging.INFO)
     logger.setLevel(level)
     for h in logger.handlers:
@@ -101,7 +101,7 @@ if __name__ == '__main__':
     parser.add_argument('data_dir', nargs='?', default='.')
     parser.add_argument('--no-plot', action='store_true')
     parser.add_argument('--excel', help='путь к выходному xlsx')
-    parser.add_argument('--log-level', default='INFO', help='уровень логирования')
+    parser.add_argument('--log-level', default='DEBUG', help='уровень логирования')
     args = parser.parse_args()
     main(args.data_dir, do_plot=not args.no_plot, excel_path=args.excel,
          log_level=args.log_level)

@@ -8,7 +8,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('data_dir', nargs='?', default='.')
     parser.add_argument('--no-plot', action='store_true')
-    parser.add_argument('--log-level', default='INFO',
+    parser.add_argument('--log-level', default='DEBUG',
                         help='уровень логирования (INFO, DEBUG и т.д.)')
     args = parser.parse_args()
     main(args.data_dir, do_plot=not args.no_plot,

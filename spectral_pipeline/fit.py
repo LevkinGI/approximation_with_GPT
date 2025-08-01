@@ -426,8 +426,49 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
         logger.info(
             "(%d, %d): использованы предварительные оценки f1=%.3f ГГц, f2=%.3f ГГц",
             ds_lf.temp_K, ds_lf.field_mT, f1_guess/GHZ, f2_guess/GHZ)
-        lf_cand = [(f1_guess, None)]
-        hf_cand = [(f2_guess, None)]
+        spec_hf = y_hf - np.mean(y_hf)
+        f_all_hf, zeta_all_hf = _esprit_freqs_and_decay(spec_hf, ds_hf.ts.meta.fs)
+        mask_hf = (
+            (zeta_all_hf > 0)
+            & (HF_BAND[0] <= f_all_hf)
+            & (f_all_hf <= HF_BAND[1])
+            & (np.abs(f_all_hf - f2_guess) <= 5 * GHZ)
+        )
+        logger.debug("ESPRIT HF filtered: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
+        hf_cand = _top2_nearest(f_all_hf[mask_hf], zeta_all_hf[mask_hf], f2_guess) if np.any(mask_hf) else []
+        if not hf_cand:
+            logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
+            f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, HF_BAND, f2_guess)
+            if f2_fallback is None:
+                raise RuntimeError("HF-тон не найден")
+            hf_cand = [(f2_fallback, None)]
+        spec_lf = y_lf - np.mean(y_lf)
+        f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
+        mask_lf = (
+            (zeta_all_lf > 0)
+            & (LF_BAND[0] <= f_all_lf)
+            & (f_all_lf <= LF_BAND[1])
+            & (np.abs(f_all_lf - f1_guess) <= 5 * GHZ)
+        )
+        logger.debug("ESPRIT LF filtered: %s", np.round(f_all_lf[mask_lf] / GHZ, 3))
+        lf_cand = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_guess) if np.any(mask_lf) else []
+        if not lf_cand:
+            logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
+            f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
+                                        LF_BAND, f1_guess,
+                                        avoid=hf_cand[0][0] if hf_cand else None)
+            if f1_fallback is None:
+                raise RuntimeError("LF-тон не найден")
+            lf_cand = [(f1_fallback, None)]
+        def _ensure_guess(cands, freq):
+            for f, _ in cands:
+                if abs(f - freq) < 20e6:
+                    return
+            cands.append((freq, None))
+        _ensure_guess(lf_cand, f1_guess)
+        _ensure_guess(hf_cand, f2_guess)
+        logger.debug("LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_cand])
+        logger.debug("HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_cand])
         freq_bounds = ((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
                        (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
     else:

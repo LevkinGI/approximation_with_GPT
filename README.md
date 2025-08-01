@@ -14,15 +14,15 @@ python find_freqs_and_visualize.py data
 После обработки скрипт открывает интерактивный график со спектрами в браузере.
 
 ### Логирование
-Все сообщения сохраняются в `logs/pipeline.log`. Уровень подробности можно
-настроить опцией `--log-level`, например:
+Все сообщения сохраняются в `logs/pipeline.log`. По умолчанию используется
+подробный уровень `DEBUG`. Его можно изменить опцией `--log-level`, например:
 
 ```bash
-python find_freqs_and_visualize.py data --log-level=DEBUG
+python find_freqs_and_visualize.py data --log-level=INFO
 # или
-python -m spectral_pipeline.cli data --log-level=DEBUG
+python -m spectral_pipeline.cli data --log-level=INFO
 ```
-При значении `DEBUG` выводятся дополнительные сведения о работе ESPRIT и
+При уровне `DEBUG` выводятся дополнительные сведения о работе ESPRIT и
 fallback-алгоритма.
 
 ## Тесты
