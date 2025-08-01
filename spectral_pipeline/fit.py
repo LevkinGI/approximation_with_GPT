@@ -89,14 +89,33 @@ def _fft_spectrum(sig: np.ndarray, fs: float, *, window_name: str = "hamming",
     return freqs, asd
 
 
-def _peak_in_band(freqs: np.ndarray, amps: np.ndarray, fmin_GHz: float,
-                  fmax_GHz: float) -> float | None:
+def _peak_in_band(
+    freqs: np.ndarray,
+    amps: np.ndarray,
+    fmin_GHz: float,
+    fmax_GHz: float,
+    *,
+    _expanded: bool = False,
+) -> float | None:
+    """Return peak frequency inside band or ``None`` if absent.
+
+    If the strongest point lies closer than 5 % of the band width to a
+    boundary, the band is considered unreliable. The search is then repeated
+    once with an expanded range of ±2 ГГц.
+    """
+    logger.info("FFT peak search: %.1f–%.1f ГГц", fmin_GHz, fmax_GHz)
     mask = (freqs >= fmin_GHz * GHZ) & (freqs <= fmax_GHz * GHZ)
     if not mask.any():
+        logger.info(
+            "No data in range %.1f–%.1f ГГц", fmin_GHz, fmax_GHz,
+        )
         return None
     f_band = freqs[mask]
     a_band = amps[mask]
     if a_band.size < 3:
+        logger.info(
+            "Not enough points in range %.1f–%.1f ГГц", fmin_GHz, fmax_GHz,
+        )
         return None
     med = np.median(a_band)
     std = np.std(a_band)
@@ -129,15 +148,47 @@ def _peak_in_band(freqs: np.ndarray, amps: np.ndarray, fmin_GHz: float,
             else:
                 best_idx = pk[idx]
             f_best = float(f_band[best_idx])
-            logger.debug("selected peak at %.3f ГГц", f_best / GHZ)
+            logger.info(
+                "Peak found at %.3f ГГц within %.1f–%.1f ГГц",
+                f_best / GHZ,
+                fmin_GHz,
+                fmax_GHz,
+            )
             return f_best
 
     max_idx = int(np.argmax(a_band))
     f_max = float(f_band[max_idx])
+    band_width = f_band[-1] - f_band[0]
+    margin = 0.05 * band_width
+    if band_width > 0 and (
+        (f_max - f_band[0] < margin) or (f_band[-1] - f_max < margin)
+    ):
+        if not _expanded:
+            new_min = fmin_GHz - 2.0
+            new_max = fmax_GHz + 2.0
+            logger.info(
+                "Peak near boundary, expanding search to %.1f–%.1f ГГц",
+                new_min,
+                new_max,
+            )
+            return _peak_in_band(freqs, amps, new_min, new_max, _expanded=True)
+        logger.info(
+            "Peak near boundary even after expansion: %.1f–%.1f ГГц",
+            fmin_GHz,
+            fmax_GHz,
+        )
+        return None
+
     logger.debug(
         "no peaks found, fallback to max: f=%.3f ГГц, amp=%.3g",
         f_max / GHZ,
         a_band[max_idx],
+    )
+    logger.info(
+        "Selected fallback peak %.3f ГГц within %.1f–%.1f ГГц",
+        f_max / GHZ,
+        fmin_GHz,
+        fmax_GHz,
     )
     return f_max
 
