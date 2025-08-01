@@ -10,6 +10,10 @@ from scipy.signal import welch, find_peaks, get_window
 
 from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
 
+# Maximum acceptable fitting cost. Pairs with higher cost are rejected
+# and treated as unsuccessful.
+MAX_COST = 80
+
 
 def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
     """Load first-approximation frequencies if file exists.
@@ -629,12 +633,23 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             f2_err=best_fit.f1_err,
             cost=best_fit.cost,
         )
-    ds_lf.fit = ds_hf.fit = best_fit
-    logger.info(
-        "(%d, %d): аппроксимация успешна f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
-        ds_lf.temp_K,
-        ds_lf.field_mT,
-        best_fit.f1 / GHZ,
-        best_fit.f2 / GHZ,
-        best_cost,
-    )
+    if best_fit.cost is not None and best_fit.cost > MAX_COST:
+        logger.warning(
+            "(%d, %d): аппроксимация отклонена f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
+            ds_lf.temp_K,
+            ds_lf.field_mT,
+            best_fit.f1 / GHZ,
+            best_fit.f2 / GHZ,
+            best_fit.cost,
+        )
+        ds_lf.fit = ds_hf.fit = None
+    else:
+        ds_lf.fit = ds_hf.fit = best_fit
+        logger.info(
+            "(%d, %d): аппроксимация успешна f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
+            ds_lf.temp_K,
+            ds_lf.field_mT,
+            best_fit.f1 / GHZ,
+            best_fit.f2 / GHZ,
+            best_fit.cost,
+        )
