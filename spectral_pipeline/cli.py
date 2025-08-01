@@ -21,7 +21,7 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
             continue
         H, T = lf.field_mT, lf.temp_K
         f1, f2 = lf.fit.f1/GHZ, lf.fit.f2/GHZ
-        recs.append(dict(H=H, T=T, LF=min(f1, f2), HF=max(f1, f2)))
+        recs.append(dict(H=H, T=T, LF=f1, HF=f2))
     if not recs:
         logger.warning("Нет данных для экспорта таблиц")
         return

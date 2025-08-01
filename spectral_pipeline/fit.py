@@ -604,7 +604,37 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
     if best_fit is None:
         logger.error("(%d, %d): ни одна комбинация не аппроксимировалась", ds_lf.temp_K, ds_lf.field_mT)
         raise RuntimeError("Ни одна комбинация не аппроксимировалась")
+    if best_fit.f1 > best_fit.f2:
+        logger.info(
+            "(%d, %d): f1=%.3f ГГц > f2=%.3f ГГц, перестановка",
+            ds_lf.temp_K,
+            ds_lf.field_mT,
+            best_fit.f1 / GHZ,
+            best_fit.f2 / GHZ,
+        )
+        best_fit = FittingResult(
+            f1=best_fit.f2,
+            f2=best_fit.f1,
+            zeta1=best_fit.zeta2,
+            zeta2=best_fit.zeta1,
+            phi1=best_fit.phi2,
+            phi2=best_fit.phi1,
+            A1=best_fit.A2,
+            A2=best_fit.A1,
+            k_lf=best_fit.k_lf,
+            k_hf=best_fit.k_hf,
+            C_lf=best_fit.C_lf,
+            C_hf=best_fit.C_hf,
+            f1_err=best_fit.f2_err,
+            f2_err=best_fit.f1_err,
+            cost=best_fit.cost,
+        )
     ds_lf.fit = ds_hf.fit = best_fit
     logger.info(
         "(%d, %d): аппроксимация успешна f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
-        ds_lf.temp_K, ds_lf.field_mT, best_fit.f1/GHZ, best_fit.f2/GHZ, best_cost)
+        ds_lf.temp_K,
+        ds_lf.field_mT,
+        best_fit.f1 / GHZ,
+        best_fit.f2 / GHZ,
+        best_cost,
+    )
