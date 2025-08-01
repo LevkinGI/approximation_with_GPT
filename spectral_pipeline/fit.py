@@ -14,6 +14,12 @@ from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
 # and treated as unsuccessful.
 MAX_COST = 120
 
+# Weight applied to the relative deviation between the HF/LF ratio obtained
+# from a candidate fit and the expected ratio.  Larger values make the
+# selection prefer frequency pairs that preserve the anticipated harmonic
+# relation even if the raw least‑squares cost is slightly worse.
+RATIO_PENALTY = 1.0
+
 
 def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
     """Load first-approximation frequencies if file exists.
@@ -584,6 +590,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         return lf_c, hf_c, None
 
     guess = None
+    target_ratio: float | None = None
     if ds_lf.root:
         guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
 
@@ -593,6 +600,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
            not (HF_BAND[0] <= f2_guess <= HF_BAND[1]):
             logger.debug("Предварительная оценка вне диапазона, игнорируется")
             guess = None
+        else:
+            target_ratio = f2_guess / f1_guess if f1_guess > 0 else None
 
     if guess is not None:
         f1_guess, f2_guess = guess
@@ -666,6 +675,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     else:
         logger.info("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
+        if lf_cand and hf_cand:
+            target_ratio = hf_cand[0][0] / lf_cand[0][0]
     fs_hf = 1.0 / float(np.mean(np.diff(t_hf)))
     fs_lf = 1.0 / float(np.mean(np.diff(t_lf)))
     freqs_fft, amps_fft = _fft_spectrum(y_hf, fs_hf)
@@ -732,7 +743,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                 f2_hz = f2_alt
                 logger.info(
                     "Refined HF peak at %.1f ГГц", f2_hz / GHZ)
-
+    if target_ratio is None and f1_hz is not None and f2_hz is not None and f1_hz > 0:
+        target_ratio = f2_hz / f1_hz
     def _append_unique(target_list, new_freq_hz):
         if new_freq_hz is None:
             return
@@ -748,7 +760,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f, z in hf_cand])
 
     seen: set[tuple[float, float]] = set()
-    best_cost = np.inf
+    best_score = np.inf
     best_fit = None
     for f1, z1 in lf_cand:
         for f2, z2 in hf_cand:
@@ -776,15 +788,21 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                     exc,
                 )
             else:
-                if cost < best_cost:
-                    best_cost = cost
+                score = cost
+                if target_ratio is not None and fit.f1 != 0:
+                    ratio = fit.f2 / fit.f1
+                    score *= 1 + RATIO_PENALTY * abs(ratio - target_ratio) / target_ratio
+                if score < best_score:
+                    best_score = score
                     best_fit = fit
             finally:
                 seen.add((f1, f2))
     if best_fit is None and guess is not None:
         logger.warning("(%d, %d): не удалось аппроксимировать с первым приближением, поиск альтернативы", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
-        best_cost = np.inf
+        if lf_cand and hf_cand:
+            target_ratio = hf_cand[0][0] / lf_cand[0][0]
+        best_score = np.inf
         for f1, z1 in lf_cand:
             for f2, z2 in hf_cand:
                 if (f1, f2) in seen:
@@ -811,8 +829,12 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                         exc,
                     )
                 else:
-                    if cost < best_cost:
-                        best_cost = cost
+                    score = cost
+                    if target_ratio is not None and fit.f1 != 0:
+                        ratio = fit.f2 / fit.f1
+                        score *= 1 + RATIO_PENALTY * abs(ratio - target_ratio) / target_ratio
+                    if score < best_score:
+                        best_score = score
                         best_fit = fit
                 finally:
                     seen.add((f1, f2))
