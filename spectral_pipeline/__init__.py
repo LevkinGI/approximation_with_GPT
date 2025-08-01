@@ -64,6 +64,7 @@ class FittingResult:
     C_hf: float
     f1_err: float | None = None
     f2_err: float | None = None
+    cost: float | None = None
 
 @dataclass(slots=True)
 class DataSet:
