@@ -14,6 +14,7 @@ def load_records(root: Path) -> List[DataSet]:
     pattern = re.compile(r"_(\d+)mT_(\d+)K_(HF|LF)_.*\.dat$", re.IGNORECASE)
     datasets: List[DataSet] = []
     data_dir = root / "data" if (root / "data").is_dir() else root
+    logger.info("Поиск данных в %s", data_dir)
     for path in sorted(data_dir.glob("*.dat")):
         m = pattern.search(path.name)
         if not m:
@@ -47,4 +48,5 @@ def load_records(root: Path) -> List[DataSet]:
         datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag,
                                ts=ts, root=data_dir))
         logger.info("Загружен %s: %d точек, fs=%.2f ГГц", path.name, len(t), fs / GHZ)
+    logger.info("Загружено %d наборов", len(datasets))
     return datasets

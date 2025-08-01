@@ -6,11 +6,27 @@ from typing import Literal, Optional
 import numpy as np
 from numpy.typing import NDArray
 import logging
+from logging.handlers import RotatingFileHandler
 import math
 
-logging.basicConfig(level=logging.INFO)
+log_dir = Path(__file__).resolve().parent.parent / "logs"
+log_dir.mkdir(exist_ok=True)
+LOG_PATH = log_dir / "pipeline.log"
+
 logger = logging.getLogger("spectral_pipeline")
-logger.setLevel(logging.INFO)
+if not logger.handlers:
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    stream_h = logging.StreamHandler()
+    stream_h.setFormatter(fmt)
+    file_h = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
+    file_h.setFormatter(fmt)
+    logger.addHandler(stream_h)
+    logger.addHandler(file_h)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 GHZ = 1e9
 NS = 1e-9
@@ -49,6 +65,7 @@ class FittingResult:
     C_hf: float
     f1_err: float | None = None
     f2_err: float | None = None
+    cost: float | None = None
 
 @dataclass(slots=True)
 class DataSet:
@@ -85,6 +102,6 @@ class DataSet:
 
 __all__ = [
     "DataSet", "FittingResult", "RecordMeta", "TimeSeries",
-    "GHZ", "NS", "PI", "FREQ_TAG", "logger",
+    "GHZ", "NS", "PI", "FREQ_TAG", "logger", "LOG_PATH",
     "C_M_S", "LF_BAND", "HF_BAND",
 ]
