@@ -429,7 +429,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     ), cost
 
 
-def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
+def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     logger.info("Обработка пары T=%d K, H=%d mT", ds_lf.temp_K, ds_lf.field_mT)
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
     t_lf, y_lf = _crop_signal(ds_lf.ts.t, ds_lf.ts.s, tag="LF")
@@ -694,6 +694,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             best_fit.cost,
         )
         ds_lf.fit = ds_hf.fit = None
+        return None
     else:
         ds_lf.fit = ds_hf.fit = best_fit
         logger.info(
@@ -704,3 +705,4 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
             best_fit.f2 / GHZ,
             best_fit.cost,
         )
+        return best_fit
