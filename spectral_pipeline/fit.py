@@ -503,7 +503,6 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
             hf_c = [(f2_fallback, None)]
-        logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_c])
         spec_lf = y_lf - np.mean(y_lf)
         f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
         mask_lf = (
@@ -525,7 +524,6 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
             lf_c = [(f1_fallback, None)]
-        logger.info("LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_c])
         return lf_c, hf_c, None
 
     guess = None
@@ -558,7 +556,6 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
             hf_cand = [(f2_fallback, None)]
-        logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_cand])
         spec_lf = y_lf - np.mean(y_lf)
         f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
         mask_lf = (
@@ -579,7 +576,6 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
             lf_cand = [(f1_fallback, None)]
-        logger.info("LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_cand])
         def _ensure_guess(cands, freq):
             for f, _ in cands:
                 if abs(f - freq) < 20e6:
@@ -587,8 +583,6 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             cands.append((freq, None))
         _ensure_guess(lf_cand, f1_guess)
         _ensure_guess(hf_cand, f2_guess)
-        logger.info("LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_cand])
-        logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_cand])
         freq_bounds = ((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
                        (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
     else:
@@ -646,8 +640,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     _append_unique(lf_cand, f1_hz)
     _append_unique(hf_cand, f2_hz)
 
-    logger.info("Final LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_cand])
-    logger.info("Final HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_cand])
+    logger.info("LF candidates: %s", [(round(f/GHZ,3), z) for f, z in lf_cand])
+    logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f, z in hf_cand])
 
     seen: set[tuple[float, float]] = set()
     best_cost = np.inf
