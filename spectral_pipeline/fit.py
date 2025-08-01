@@ -238,9 +238,10 @@ def _crop_signal(t: NDArray, s: NDArray, tag: str):
         (np.diff(np.signbit(np.diff(s))) > 0) & (np.arange(len(s))[1:-1] > pk)
     )[0]
     st = minima[0] + 1 if minima.size else pk + 1
-    # right-side cropping is temporarily disabled
-    # cutoff = 0.9e-9 if tag == "LF" else 0.12e-9
-    # end = st + np.searchsorted(t[st:], cutoff, "right")
+    if tag == "LF":
+        cutoff = 0.7e-9
+        end = st + np.searchsorted(t[st:], t[st] + cutoff, "right")
+        return t[st:end], s[st:end]
     return t[st:], s[st:]
 
 
