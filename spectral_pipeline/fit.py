@@ -551,35 +551,55 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> None:
     logger.info("Final LF candidates: %s", [(round(f/GHZ,3), z) for f,z in lf_cand])
     logger.info("Final HF candidates: %s", [(round(f/GHZ,3), z) for f,z in hf_cand])
 
+    seen: set[tuple[float, float]] = set()
     best_cost = np.inf
     best_fit = None
     for f1, z1 in lf_cand:
         for f2, z2 in hf_cand:
+            if (f1, f2) in seen:
+                continue
             ds_lf.f1_init, ds_lf.zeta1 = f1, z1
             ds_hf.f2_init, ds_hf.zeta2 = f2, z2
             try:
                 fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
             except Exception as exc:
-                logger.debug("Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s", f1/GHZ, f2/GHZ, exc)
-                continue
-            if cost < best_cost:
-                best_cost = cost
-                best_fit = fit
+                logger.debug(
+                    "Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s",
+                    f1 / GHZ,
+                    f2 / GHZ,
+                    exc,
+                )
+            else:
+                if cost < best_cost:
+                    best_cost = cost
+                    best_fit = fit
+            finally:
+                seen.add((f1, f2))
     if best_fit is None and guess is not None:
         logger.warning("(%d, %d): не удалось аппроксимировать с первым приближением, поиск альтернативы", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
         best_cost = np.inf
         for f1, z1 in lf_cand:
             for f2, z2 in hf_cand:
+                if (f1, f2) in seen:
+                    continue
                 ds_lf.f1_init, ds_lf.zeta1 = f1, z1
                 ds_hf.f2_init, ds_hf.zeta2 = f2, z2
                 try:
                     fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
-                except Exception:
-                    continue
-                if cost < best_cost:
-                    best_cost = cost
-                    best_fit = fit
+                except Exception as exc:
+                    logger.debug(
+                        "Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s",
+                        f1 / GHZ,
+                        f2 / GHZ,
+                        exc,
+                    )
+                else:
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_fit = fit
+                finally:
+                    seen.add((f1, f2))
 
     if best_fit is None:
         logger.error("(%d, %d): ни одна комбинация не аппроксимировалась", ds_lf.temp_K, ds_lf.field_mT)
