@@ -32,7 +32,8 @@ def load_records(root: Path) -> List[DataSet]:
         x0 = x[np.argmax(s)]
         t = 2.0 * (x - x0) / C_M_S  # секунды
         cutoff = 0.4e-9 if tag == "LF" else 0.1e-9
-        mask = (t >= 0) & (t <= cutoff)
+        # mask = (t >= 0) & (t <= cutoff)
+        mask = t >= 0
         t, s = t[mask], s[mask]
         if len(t) < 10:
             logger.warning("Пропуск %s: слишком короткий ряд", path.name)
@@ -43,6 +44,7 @@ def load_records(root: Path) -> List[DataSet]:
             continue
         fs = 1.0 / dt
         ts = TimeSeries(t=t, s=s, meta=RecordMeta(fs=fs))
-        datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag, ts=ts))
+        datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag,
+                               ts=ts, root=data_dir))
         logger.info("Загружен %s: %d точек, fs=%.2f ГГц", path.name, len(t), fs / GHZ)
     return datasets

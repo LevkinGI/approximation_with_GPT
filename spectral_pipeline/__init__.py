@@ -68,6 +68,7 @@ class DataSet:
     temp_K: int
     tag: FREQ_TAG
     ts: TimeSeries
+    root: Path | None = None
 
     # начальные оценки из Coarse + ESPRIT
     f1_init: float = 0.0
