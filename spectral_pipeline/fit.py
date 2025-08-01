@@ -207,7 +207,7 @@ def _crop_signal(t: NDArray, s: NDArray, tag: str):
 
 def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, float],
                    f_rough: float, avoid: float | None = None, df_min: float = 0.5 * GHZ,
-                   order_burg: int = 8) -> float | None:
+                   order_burg: int = 8, n_avg_fft: int = 4) -> float | None:
     logger.debug(
         "Fallback search: range=[%.1f, %.1f] ГГц, avoid=%s", f_range[0]/GHZ,
         f_range[1]/GHZ, None if avoid is None else f"{avoid/GHZ:.3f}")
@@ -222,16 +222,52 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
             return float(f_burg)
     except Exception as exc:
         logger.debug("Burg failed: %s", exc)
-    f, P = welch(y, fs=fs, nperseg=min(256, len(y)//2),
-                 detrend='constant', scaling='density')
-    mask = (f >= f_range[0]) & (f <= f_range[1])
-    if avoid is not None:
-        mask &= np.abs(f - avoid) >= df_min
-    if not np.any(mask):
+
+    def _welch_peak() -> tuple[float | None, float]:
+        f, P = welch(y, fs=fs, nperseg=min(256, len(y)//2),
+                     detrend='constant', scaling='density')
+        mask = (f >= f_range[0]) & (f <= f_range[1])
+        if avoid is not None:
+            mask &= np.abs(f - avoid) >= df_min
+        if not np.any(mask):
+            return None, 0.0
+        idx = np.argmax(P[mask])
+        return float(f[mask][idx]), float(P[mask][idx])
+
+    def _avg_fft_peak() -> tuple[float | None, float]:
+        seg_len = len(y) // n_avg_fft
+        if seg_len < 8:
+            return None, 0.0
+        trimmed = y[:seg_len * n_avg_fft]
+        segs = trimmed.reshape(n_avg_fft, seg_len)
+        spec = np.abs(np.fft.rfft(segs, axis=1))
+        avg_spec = np.mean(spec, axis=0)
+        freqs = np.fft.rfftfreq(seg_len, d=1 / fs)
+        mask = (freqs >= f_range[0]) & (freqs <= f_range[1])
+        if avoid is not None:
+            mask &= np.abs(freqs - avoid) >= df_min
+        if not np.any(mask):
+            return None, 0.0
+        idx = np.argmax(avg_spec[mask])
+        return float(freqs[mask][idx]), float(avg_spec[mask][idx])
+
+    fw, pw = _welch_peak()
+    if fw is not None:
+        logger.debug("Welch estimate: %.3f ГГц", fw / GHZ)
+    fa, pa = _avg_fft_peak()
+    if fa is not None:
+        logger.debug("AvgFFT estimate: %.3f ГГц", fa / GHZ)
+
+    candidates: list[tuple[float, float, float]] = []
+    if fw is not None:
+        candidates.append((fw, pw, abs(fw - f_rough)))
+    if fa is not None:
+        candidates.append((fa, pa, abs(fa - f_rough)))
+    if not candidates:
         return None
-    f_sel = float(f[mask][np.argmax(P[mask])])
-    logger.debug("Welch estimate: %.3f ГГц", f_sel / GHZ)
-    return f_sel
+    # choose by amplitude, then by closeness to rough estimate
+    candidates.sort(key=lambda c: (c[1], -c[2]), reverse=True)
+    return candidates[0][0]
 
 
 def _top2_nearest(freqs: NDArray, zetas: NDArray, f0: float
@@ -447,14 +483,18 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         spec_hf = y_hf - np.mean(y_hf)
         f_all_hf, zeta_all_hf = _esprit_freqs_and_decay(spec_hf, ds_hf.ts.meta.fs)
         mask_hf = (
-            (zeta_all_hf > 0)
+            (zeta_all_hf > -5e8)
             & (HF_BAND[0] <= f_all_hf)
             & (f_all_hf <= HF_BAND[1])
-            & (np.abs(f_all_hf - f2_rough) <= 5 * GHZ)
+            & (np.abs(f_all_hf - f2_rough) <= 7 * GHZ)
         )
         logger.debug("ESPRIT HF filtered: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
+        if not np.any(mask_hf):
+            mask_hf = (HF_BAND[0] <= f_all_hf) & (f_all_hf <= HF_BAND[1])
+            logger.debug("ESPRIT HF relaxed: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
         if np.any(mask_hf):
-            hf_c = list(zip(f_all_hf[mask_hf], zeta_all_hf[mask_hf]))
+            hf_c = [(f, z if z > 0 else None)
+                    for f, z in zip(f_all_hf[mask_hf], zeta_all_hf[mask_hf])]
         else:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
             range_hf = (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ) if f2_rough is not None else HF_BAND
@@ -500,13 +540,16 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         spec_hf = y_hf - np.mean(y_hf)
         f_all_hf, zeta_all_hf = _esprit_freqs_and_decay(spec_hf, ds_hf.ts.meta.fs)
         mask_hf = (
-            (zeta_all_hf > 0)
+            (zeta_all_hf > -5e8)
             & (HF_BAND[0] <= f_all_hf)
             & (f_all_hf <= HF_BAND[1])
-            & (np.abs(f_all_hf - f2_guess) <= 5 * GHZ)
+            & (np.abs(f_all_hf - f2_guess) <= 7 * GHZ)
         )
         logger.debug("ESPRIT HF filtered: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
-        hf_cand = _top2_nearest(f_all_hf[mask_hf], zeta_all_hf[mask_hf], f2_guess) if np.any(mask_hf) else []
+        if not np.any(mask_hf):
+            mask_hf = (HF_BAND[0] <= f_all_hf) & (f_all_hf <= HF_BAND[1])
+            logger.debug("ESPRIT HF relaxed: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
+        hf_cand = _top2_nearest(f_all_hf[mask_hf], np.maximum(zeta_all_hf[mask_hf], 0.0), f2_guess) if np.any(mask_hf) else []
         if not hf_cand:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
             range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
