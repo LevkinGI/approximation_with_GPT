@@ -238,6 +238,11 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
     logger.debug(
         "Fallback search: range=[%.1f, %.1f] ГГц, avoid=%s", f_range[0]/GHZ,
         f_range[1]/GHZ, None if avoid is None else f"{avoid/GHZ:.3f}")
+
+    nperseg = len(y) // 4
+    if nperseg < 8:
+        logger.info("Signal too short for fallback peak search: %d samples", len(y))
+        return None
     try:
         ar, _ = burg(y - y.mean(), order=order_burg)
         roots = np.roots(np.r_[1, -ar])
@@ -251,7 +256,7 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         logger.debug("Burg failed: %s", exc)
 
     def _welch_peak() -> tuple[float | None, float]:
-        f, P = welch(y, fs=fs, nperseg=min(256, len(y)//2),
+        f, P = welch(y, fs=fs, nperseg=nperseg,
                      detrend='constant', scaling='density')
         mask = (f >= f_range[0]) & (f <= f_range[1])
         if avoid is not None:
