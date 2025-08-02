@@ -338,6 +338,31 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         idx = np.argmax(spec[mask])
         return float(freqs[mask][idx]), float(spec[mask][idx])
 
+    def _music_peak() -> tuple[float | None, float]:
+        """Frequency estimate using a simple MUSIC spectral estimator."""
+        p = min(8, len(y) // 3)
+        if p < 2:
+            return None, 0.0
+        r = np.array([np.dot(y[: len(y) - k], y[k:]) for k in range(p)])
+        from scipy.linalg import toeplitz
+        R = toeplitz(r)
+        try:
+            w, v = np.linalg.eigh(R)
+        except np.linalg.LinAlgError:
+            return None, 0.0
+        En = v[:, :-1]
+        freqs = np.linspace(f_range[0], f_range[1], 512)
+        a = np.exp(-1j * 2 * np.pi * np.arange(p)[:, None] * freqs / fs)
+        ps = 1.0 / (np.sum(np.abs(En.conj().T @ a) ** 2, axis=0) + 1e-16)
+        if avoid is not None:
+            mask = np.abs(freqs - avoid) >= df_min
+        else:
+            mask = np.ones_like(freqs, dtype=bool)
+        if not np.any(mask):
+            return None, 0.0
+        idx = int(np.argmax(ps[mask]))
+        return float(freqs[mask][idx]), float(ps[mask][idx])
+
     def _acf_peak() -> tuple[float | None, float]:
         y0 = y - y.mean()
         corr = np.correlate(y0, y0, mode="full")[len(y0)-1:]
@@ -400,6 +425,9 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
     fczt, pczt = _czt_peak()
     if fczt is not None:
         logger.debug("CZT estimate: %.3f ГГц", fczt / GHZ)
+    fm, pm = _music_peak()
+    if fm is not None:
+        logger.debug("MUSIC estimate: %.3f ГГц", fm / GHZ)
     fc, pc = _acf_peak()
     if fc is not None:
         logger.debug("ACF estimate: %.3f ГГц", fc / GHZ)
@@ -414,6 +442,8 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         candidates.append((fa, pa, abs(fa - f_rough)))
     if fczt is not None:
         candidates.append((fczt, pczt, abs(fczt - f_rough)))
+    if fm is not None:
+        candidates.append((fm, pm, abs(fm - f_rough)))
     if fc is not None:
         candidates.append((fc, pc, abs(fc - f_rough)))
     if fz is not None:
