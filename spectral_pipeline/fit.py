@@ -675,8 +675,6 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     else:
         logger.info("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
-        if lf_cand and hf_cand:
-            target_ratio = hf_cand[0][0] / lf_cand[0][0]
     fs_hf = 1.0 / float(np.mean(np.diff(t_hf)))
     fs_lf = 1.0 / float(np.mean(np.diff(t_lf)))
     freqs_fft, amps_fft = _fft_spectrum(y_hf, fs_hf)
@@ -798,10 +796,17 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             finally:
                 seen.add((f1, f2))
     if best_fit is None and guess is not None:
-        logger.warning("(%d, %d): не удалось аппроксимировать с первым приближением, поиск альтернативы", ds_lf.temp_K, ds_lf.field_mT)
+        logger.warning(
+            "(%d, %d): не удалось аппроксимировать с первым приближением, поиск альтернативы",
+            ds_lf.temp_K,
+            ds_lf.field_mT,
+        )
+        # Re-run the candidate search to broaden the pool but keep the
+        # original target_ratio derived from FFT peaks or the initial
+        # guess.  Earlier versions overwrote target_ratio here using the
+        # first candidate pair, which could bias the selection toward
+        # spurious low-frequency ratios when ESPRIT misidentified peaks.
         lf_cand, hf_cand, freq_bounds = _search_candidates()
-        if lf_cand and hf_cand:
-            target_ratio = hf_cand[0][0] / lf_cand[0][0]
         best_score = np.inf
         for f1, z1 in lf_cand:
             for f2, z2 in hf_cand:
