@@ -103,6 +103,28 @@ def _fft_spectrum(sig: np.ndarray, fs: float, *, window_name: str = "hamming",
     return freqs, asd
 
 
+def _parabolic_peak(freqs: np.ndarray, amps: np.ndarray, idx: int) -> float:
+    """Refine peak location using parabolic interpolation.
+
+    ``freqs`` must be uniformly spaced, as is the case for FFT bins.  The
+    function returns the interpolated frequency in Hz.  If the index is at a
+    boundary or the curvature is non-positive the original bin frequency is
+    returned.
+    """
+
+    if idx <= 0 or idx >= len(amps) - 1:
+        return float(freqs[idx])
+
+    y0, y1, y2 = amps[idx - 1], amps[idx], amps[idx + 1]
+    denom = y0 - 2 * y1 + y2
+    if denom <= 0:
+        return float(freqs[idx])
+
+    delta = 0.5 * (y0 - y2) / denom
+    df = freqs[1] - freqs[0]
+    return float(freqs[idx] + delta * df)
+
+
 def _peak_in_band(
     freqs: np.ndarray,
     amps: np.ndarray,
@@ -179,13 +201,13 @@ def _peak_in_band(
                     best_idx = (left + right) // 2
                 else:
                     best_idx = pk[idx]
-                f_best = float(f_band[best_idx])
+                f_best = _parabolic_peak(f_band, a_band, best_idx)
                 found_peak = True
                 break
 
         if not found_peak:
             max_idx = int(np.argmax(a_band))
-            f_best = float(f_band[max_idx])
+            f_best = _parabolic_peak(f_band, a_band, max_idx)
             logger.debug(
                 "no peaks found, fallback to max: f=%.3f ГГц, amp=%.3g",
                 f_best / GHZ,
