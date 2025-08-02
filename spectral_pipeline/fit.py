@@ -28,6 +28,11 @@ RATIO_PENALTY = 1.0
 RATIO_MIN = 1.5
 RATIO_MAX = 4.0
 
+# Weight applied to the relative deviation from the theoretical frequency
+# guesses.  A value of zero disables the penalty while larger values keep the
+# optimisation closer to the expected frequencies derived from theory.
+GUESS_PENALTY = 0.5
+
 
 def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
     """Load first-approximation frequencies if file exists.
@@ -946,6 +951,11 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                     score = cost
                     if target_ratio is not None:
                         score *= 1 + RATIO_PENALTY * abs(ratio - target_ratio) / target_ratio
+                    if guess is not None:
+                        f1g, f2g = guess
+                        if f1g > 0 and f2g > 0:
+                            dev = abs(fit.f1 - f1g) / f1g + abs(fit.f2 - f2g) / f2g
+                            score *= 1 + GUESS_PENALTY * dev / 2
                 if score < best_score:
                     best_score = score
                     best_fit = fit
