@@ -37,12 +37,15 @@ GUESS_PENALTY = 1.0
 # Maximum allowed relative deviation from theoretical frequency guesses
 # before a candidate fit is considered implausible.  Deviations within this
 # tolerance are penalised proportionally, larger deviations are rejected.
-GUESS_DEV_TOL = 0.40
+# A tight 5 % band keeps optimisation anchored to the theoretical model.
+GUESS_DEV_TOL = 0.05
 
 # Relative tolerance for deviations from the expected HF/LF ratio when a
 # theoretical ratio is available. The ratio penalty uses this value for
 # normalisation in the same way as the frequency guess penalty above.
-RATIO_DEV_TOL = 0.40
+# Using the same 5 % window ensures harmonic relationships remain close to
+# their predicted values.
+RATIO_DEV_TOL = 0.05
 
 
 def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
