@@ -18,7 +18,15 @@ MAX_COST = 120
 # from a candidate fit and the expected ratio.  Larger values make the
 # selection prefer frequency pairs that preserve the anticipated harmonic
 # relation even if the raw least‑squares cost is slightly worse.
+# Weight applied to ratio mismatch when ranking candidate fits.  The
+# penalty is relative to the best ratio found and therefore dimensionless.
 RATIO_PENALTY = 1.0
+
+# Acceptable bounds for the HF/LF frequency ratio.  Candidate fits outside
+# this window are strongly down‑weighted to avoid selecting harmonics that
+# are obviously unphysical (e.g. HF ≈ LF).
+RATIO_MIN = 1.5
+RATIO_MAX = 4.0
 
 
 def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
@@ -596,12 +604,19 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
 
     if guess is not None:
         f1_guess, f2_guess = guess
-        if not (LF_BAND[0] <= f1_guess <= LF_BAND[1]) or \
-           not (HF_BAND[0] <= f2_guess <= HF_BAND[1]):
+        ratio_guess = f2_guess / f1_guess if f1_guess > 0 else np.inf
+        if (
+            f1_guess < LF_BAND[0]
+            or f1_guess > LF_BAND[1]
+            or f2_guess < HF_BAND[0]
+            or f2_guess > HF_BAND[1]
+            or ratio_guess < RATIO_MIN
+            or ratio_guess > RATIO_MAX
+        ):
             logger.debug("Предварительная оценка вне диапазона, игнорируется")
             guess = None
         else:
-            target_ratio = f2_guess / f1_guess if f1_guess > 0 else None
+            target_ratio = ratio_guess
 
     if guess is not None:
         f1_guess, f2_guess = guess
@@ -719,15 +734,15 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     # Occasionally the automatic FFT search returns a spurious HF peak
     # far away from the LF component, especially when the true HF tone
     # is weak.  If the ratio between the detected HF and LF peaks lies
-    # outside the physically plausible range (roughly 0.8–5× of the LF
-    # frequency) we perform a secondary search constrained by this
-    # ratio.  This prevents the algorithm from jumping to very high
-    # frequencies when the spectrum is dominated by noise.
+    # outside the physically plausible range we perform a secondary
+    # search constrained by this ratio.  This prevents the algorithm
+    # from jumping to very low or very high frequencies when the spectrum
+    # is dominated by noise.
     if f1_hz is not None and f2_hz is not None:
         ratio = f2_hz / f1_hz
-        if ratio > 5.0 or ratio < 0.8:
-            fmin = max(HF_BAND[0] / GHZ, (f1_hz / GHZ) * 0.8)
-            fmax = min(HF_BAND[1] / GHZ, (f1_hz / GHZ) * 5.0)
+        if ratio < RATIO_MIN or ratio > RATIO_MAX:
+            fmin = max(HF_BAND[0] / GHZ, (f1_hz / GHZ) * RATIO_MIN)
+            fmax = min(HF_BAND[1] / GHZ, (f1_hz / GHZ) * RATIO_MAX)
             logger.info(
                 "HF peak %.1f ГГц (ratio %.2f) outside expected bounds;"
                 " refining search to %.1f–%.1f ГГц",
@@ -739,8 +754,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             f2_alt = _peak_in_band(freqs_fft, amps_fft, fmin, fmax)
             if f2_alt is not None:
                 f2_hz = f2_alt
-                logger.info(
-                    "Refined HF peak at %.1f ГГц", f2_hz / GHZ)
+                logger.info("Refined HF peak at %.1f ГГц", f2_hz / GHZ)
     if target_ratio is None and f1_hz is not None and f2_hz is not None and f1_hz > 0:
         target_ratio = f2_hz / f1_hz
     def _append_unique(target_list, new_freq_hz):
@@ -786,10 +800,13 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                     exc,
                 )
             else:
-                score = cost
-                if target_ratio is not None and fit.f1 != 0:
-                    ratio = fit.f2 / fit.f1
-                    score *= 1 + RATIO_PENALTY * abs(ratio - target_ratio) / target_ratio
+                ratio = fit.f2 / fit.f1 if fit.f1 != 0 else np.inf
+                if ratio < RATIO_MIN or ratio > RATIO_MAX:
+                    score = cost + 1e6  # effectively discard implausible ratios
+                else:
+                    score = cost
+                    if target_ratio is not None:
+                        score *= 1 + RATIO_PENALTY * abs(ratio - target_ratio) / target_ratio
                 if score < best_score:
                     best_score = score
                     best_fit = fit
@@ -834,10 +851,13 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                         exc,
                     )
                 else:
-                    score = cost
-                    if target_ratio is not None and fit.f1 != 0:
-                        ratio = fit.f2 / fit.f1
-                        score *= 1 + RATIO_PENALTY * abs(ratio - target_ratio) / target_ratio
+                    ratio = fit.f2 / fit.f1 if fit.f1 != 0 else np.inf
+                    if ratio < RATIO_MIN or ratio > RATIO_MAX:
+                        score = cost + 1e6
+                    else:
+                        score = cost
+                        if target_ratio is not None:
+                            score *= 1 + RATIO_PENALTY * abs(ratio - target_ratio) / target_ratio
                     if score < best_score:
                         best_score = score
                         best_fit = fit
