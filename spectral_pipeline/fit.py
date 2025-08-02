@@ -6,7 +6,7 @@ import math
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import least_squares
-from scipy.signal import welch, find_peaks, get_window
+from scipy.signal import welch, find_peaks, get_window, czt
 
 from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
 
@@ -319,6 +319,25 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         idx = np.argmax(avg_spec[mask])
         return float(freqs[mask][idx]), float(avg_spec[mask][idx])
 
+    def _czt_peak() -> tuple[float | None, float]:
+        """High-resolution spectral peak using the chirp z-transform."""
+        if len(y) < 512:
+            return None, 0.0
+        n = max(256, int(4 * (f_range[1] - f_range[0]) / df_min))
+        f1, f2 = f_range
+        w = np.exp(-1j * 2 * np.pi * (f2 - f1) / (n * fs))
+        a = np.exp(1j * 2 * np.pi * f1 / fs)
+        spec = np.abs(czt(y, n, w, a))
+        freqs = f1 + np.arange(n) * (f2 - f1) / n
+        if avoid is not None:
+            mask = np.abs(freqs - avoid) >= df_min
+        else:
+            mask = np.ones_like(freqs, dtype=bool)
+        if not np.any(mask):
+            return None, 0.0
+        idx = np.argmax(spec[mask])
+        return float(freqs[mask][idx]), float(spec[mask][idx])
+
     def _acf_peak() -> tuple[float | None, float]:
         y0 = y - y.mean()
         corr = np.correlate(y0, y0, mode="full")[len(y0)-1:]
@@ -378,6 +397,9 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
     fa, pa = _avg_fft_peak()
     if fa is not None:
         logger.debug("AvgFFT estimate: %.3f ГГц", fa / GHZ)
+    fczt, pczt = _czt_peak()
+    if fczt is not None:
+        logger.debug("CZT estimate: %.3f ГГц", fczt / GHZ)
     fc, pc = _acf_peak()
     if fc is not None:
         logger.debug("ACF estimate: %.3f ГГц", fc / GHZ)
@@ -390,6 +412,8 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         candidates.append((fw, pw, abs(fw - f_rough)))
     if fa is not None:
         candidates.append((fa, pa, abs(fa - f_rough)))
+    if fczt is not None:
+        candidates.append((fczt, pczt, abs(fczt - f_rough)))
     if fc is not None:
         candidates.append((fc, pc, abs(fc - f_rough)))
     if fz is not None:
