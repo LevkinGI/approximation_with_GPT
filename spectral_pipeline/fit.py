@@ -15,12 +15,12 @@ from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
 MAX_COST = 120
 
 # Weight applied to the relative deviation between the HF/LF ratio obtained
-# from a candidate fit and the expected ratio.  Larger values make the
+# from a candidate fit and the expected ratio. Larger values make the
 # selection prefer frequency pairs that preserve the anticipated harmonic
 # relation even if the raw least‑squares cost is slightly worse.
-# Weight applied to ratio mismatch when ranking candidate fits.  The
-# penalty is relative to the best ratio found and therefore dimensionless.
-RATIO_PENALTY = 1.0
+# The penalty is relative to the best ratio found and therefore
+# dimensionless.
+RATIO_PENALTY = 2.0
 
 # Acceptable bounds for the HF/LF frequency ratio.  Candidate fits outside
 # this window are strongly down‑weighted to avoid selecting harmonics that
@@ -31,7 +31,7 @@ RATIO_MAX = 4.0
 # Weight applied to the relative deviation from the theoretical frequency
 # guesses.  A value of zero disables the penalty while larger values keep the
 # optimisation closer to the expected frequencies derived from theory.
-GUESS_PENALTY = 0.5
+GUESS_PENALTY = 1.0
 
 # Maximum allowed relative deviation from theoretical frequency guesses
 # before a candidate fit is considered implausible.  Values exceeding this
@@ -668,7 +668,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
 
     def _search_candidates() -> tuple[list[tuple[float, Optional[float]]],
                                       list[tuple[float, Optional[float]]],
-                                      tuple[tuple[float, float], tuple[float, float]] | None]:
+                                      tuple[tuple[float, float], tuple[float, float]] | None,
+                                      float | None]:
         f1_rough, phi1, A1, tau1 = _single_sine_refine(t_lf, y_lf, f0=10 * GHZ)
         proto_lf = A1 * np.exp(-t_hf / tau1) * np.cos(2 * np.pi * f1_rough * t_hf + phi1)
         residual = y_hf - proto_lf
@@ -744,7 +745,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
             lf_c = [(f1_fallback, None)]
-        return lf_c, hf_c, None
+        ratio_rough = f2_rough / f1_rough if f1_rough else None
+        return lf_c, hf_c, None, ratio_rough
 
     guess = None
     target_ratio: float | None = None
@@ -753,22 +755,17 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
 
     if guess is not None:
         f1_guess, f2_guess = guess
+        f1_guess = float(np.clip(f1_guess, LF_BAND[0], LF_BAND[1]))
+        f2_guess = float(np.clip(f2_guess, HF_BAND[0], HF_BAND[1]))
         ratio_guess = f2_guess / f1_guess if f1_guess > 0 else np.inf
-        if (
-            f1_guess < LF_BAND[0]
-            or f1_guess > LF_BAND[1]
-            or f2_guess < HF_BAND[0]
-            or f2_guess > HF_BAND[1]
-            or ratio_guess < RATIO_MIN
-            or ratio_guess > RATIO_MAX
-        ):
-            logger.debug("Предварительная оценка вне диапазона, игнорируется")
-            guess = None
-        else:
-            target_ratio = ratio_guess
-
-    if guess is not None:
-        f1_guess, f2_guess = guess
+        if ratio_guess < RATIO_MIN:
+            f2_guess = f1_guess * RATIO_MIN
+            ratio_guess = RATIO_MIN
+        elif ratio_guess > RATIO_MAX:
+            f2_guess = f1_guess * RATIO_MAX
+            ratio_guess = RATIO_MAX
+        target_ratio = ratio_guess
+        guess = (f1_guess, f2_guess)
         logger.info(
             "(%d, %d): использованы предварительные оценки f1=%.3f ГГц, f2=%.3f ГГц",
             ds_lf.temp_K, ds_lf.field_mT, f1_guess/GHZ, f2_guess/GHZ)
@@ -788,13 +785,10 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         if not hf_cand:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
             span = 10 * GHZ
-            if f2_guess < HF_BAND[0] or f2_guess > HF_BAND[1]:
-                range_hf = HF_BAND
-            else:
-                range_hf = (
-                    max(HF_BAND[0], f2_guess - span),
-                    min(HF_BAND[1], f2_guess + span),
-                )
+            range_hf = (
+                max(HF_BAND[0], f2_guess - span),
+                min(HF_BAND[1], f2_guess + span),
+            )
             logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
             f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_guess)
             if f2_fallback is None:
@@ -813,13 +807,10 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         if not lf_cand:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
             span = 10 * GHZ
-            if f1_guess < LF_BAND[0] or f1_guess > LF_BAND[1]:
-                range_lf = LF_BAND
-            else:
-                range_lf = (
-                    max(LF_BAND[0], f1_guess - span),
-                    min(LF_BAND[1], f1_guess + span),
-                )
+            range_lf = (
+                max(LF_BAND[0], f1_guess - span),
+                min(LF_BAND[1], f1_guess + span),
+            )
             logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
             f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
                                         range_lf, f1_guess,
@@ -841,7 +832,9 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         freq_bounds = ((f1_lo, f1_hi), (f2_lo, f2_hi))
     else:
         logger.info("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
-        lf_cand, hf_cand, freq_bounds = _search_candidates()
+        lf_cand, hf_cand, freq_bounds, rough_ratio = _search_candidates()
+        if rough_ratio is not None and RATIO_MIN <= rough_ratio <= RATIO_MAX:
+            target_ratio = rough_ratio
     fs_hf = 1.0 / float(np.mean(np.diff(t_hf)))
     fs_lf = 1.0 / float(np.mean(np.diff(t_lf)))
     freqs_fft, amps_fft = _fft_spectrum(y_hf, fs_hf)
@@ -908,7 +901,9 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                 f2_hz = f2_alt
                 logger.info("Refined HF peak at %.1f ГГц", f2_hz / GHZ)
     if target_ratio is None and f1_hz is not None and f2_hz is not None and f1_hz > 0:
-        target_ratio = f2_hz / f1_hz
+        ratio_fft = f2_hz / f1_hz
+        if RATIO_MIN <= ratio_fft <= RATIO_MAX:
+            target_ratio = ratio_fft
     def _append_unique(target_list, new_freq_hz):
         if new_freq_hz is None:
             return
@@ -984,7 +979,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         # guess.  Earlier versions overwrote target_ratio here using the
         # first candidate pair, which could bias the selection toward
         # spurious low-frequency ratios when ESPRIT misidentified peaks.
-        lf_cand, hf_cand, freq_bounds = _search_candidates()
+        lf_cand, hf_cand, freq_bounds, _ = _search_candidates()
         best_score = np.inf
         for f1, z1 in lf_cand:
             for f2, z2 in hf_cand:
