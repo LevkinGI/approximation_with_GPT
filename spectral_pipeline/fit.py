@@ -158,6 +158,7 @@ def _peak_in_band(
     *,
     max_expansions: int = 3,
     expansion_step_GHz: float = 2.0,
+    theory_GHz: float | None = None,
 ) -> float | None:
     """Return peak frequency inside band or ``None`` if absent.
 
@@ -231,13 +232,22 @@ def _peak_in_band(
                 break
 
         if not found_peak:
-            max_idx = int(np.argmax(a_band))
-            f_best = _parabolic_peak(f_band, a_band, max_idx)
-            logger.debug(
-                "no peaks found, fallback to max: f=%.3f ГГц, amp=%.3g",
-                f_best / GHZ,
-                a_band[max_idx],
-            )
+            if theory_GHz is not None and fmin_GHz <= theory_GHz <= fmax_GHz:
+                idx = int(np.argmin(np.abs(f_band - theory_GHz * GHZ)))
+                f_best = _parabolic_peak(f_band, a_band, idx)
+                logger.debug(
+                    "no peaks found, using theory: f=%.3f ГГц, amp=%.3g",
+                    f_best / GHZ,
+                    a_band[idx],
+                )
+            else:
+                max_idx = int(np.argmax(a_band))
+                f_best = _parabolic_peak(f_band, a_band, max_idx)
+                logger.debug(
+                    "no peaks found, fallback to max: f=%.3f ГГц, amp=%.3g",
+                    f_best / GHZ,
+                    a_band[max_idx],
+                )
 
         band_width = f_band[-1] - f_band[0]
         margin = 0.05 * band_width
@@ -868,8 +878,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         lf_hi = f1_guess * (1 + GUESS_DEV_TOL) / GHZ
         hf_lo = f2_guess * (1 - GUESS_DEV_TOL) / GHZ
         hf_hi = f2_guess * (1 + GUESS_DEV_TOL) / GHZ
-        f1_hz = _peak_in_band(freqs_fft, amps_fft, lf_lo, lf_hi)
-        f2_hz = _peak_in_band(freqs_fft, amps_fft, hf_lo, hf_hi)
+        f1_hz = _peak_in_band(freqs_fft, amps_fft, lf_lo, lf_hi, theory_GHz=f1_guess/GHZ)
+        f2_hz = _peak_in_band(freqs_fft, amps_fft, hf_lo, hf_hi, theory_GHz=f2_guess/GHZ)
         range_lf = f"{lf_lo:.0f}–{lf_hi:.0f}"
         range_hf = f"{hf_lo:.0f}–{hf_hi:.0f}"
     else:
@@ -911,7 +921,13 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                 fmin,
                 fmax,
             )
-            f2_alt = _peak_in_band(freqs_fft, amps_fft, fmin, fmax)
+            f2_alt = _peak_in_band(
+                freqs_fft,
+                amps_fft,
+                fmin,
+                fmax,
+                theory_GHz=(f2_guess / GHZ if guess is not None else None),
+            )
             if f2_alt is not None:
                 f2_hz = f2_alt
                 logger.info("Refined HF peak at %.1f ГГц", f2_hz / GHZ)
