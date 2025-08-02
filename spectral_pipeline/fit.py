@@ -319,18 +319,43 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         idx = np.argmax(avg_spec[mask])
         return float(freqs[mask][idx]), float(avg_spec[mask][idx])
 
+    def _acf_peak() -> tuple[float | None, float]:
+        y0 = y - y.mean()
+        corr = np.correlate(y0, y0, mode="full")[len(y0)-1:]
+        lags = np.arange(len(corr)) / fs
+        fmax, fmin = f_range[1], f_range[0]
+        # convert frequency bounds to lag bounds
+        lag_min = 1.0 / fmax if fmax > 0 else lags[-1]
+        lag_max = 1.0 / fmin if fmin > 0 else lags[-1]
+        mask = (lags >= lag_min) & (lags <= lag_max)
+        if avoid is not None:
+            lag_avoid = 1.0 / avoid if avoid != 0 else 0.0
+            mask &= np.abs(lags - lag_avoid) >= df_min / (avoid**2 + 1e-16)
+        if not np.any(mask):
+            return None, 0.0
+        idx = np.argmax(corr[mask])
+        lag = lags[mask][idx]
+        if lag <= 0:
+            return None, 0.0
+        return float(1.0 / lag), float(corr[mask][idx] / (corr[0] + 1e-16))
+
     fw, pw = _welch_peak()
     if fw is not None:
         logger.debug("Welch estimate: %.3f ГГц", fw / GHZ)
     fa, pa = _avg_fft_peak()
     if fa is not None:
         logger.debug("AvgFFT estimate: %.3f ГГц", fa / GHZ)
+    fc, pc = _acf_peak()
+    if fc is not None:
+        logger.debug("ACF estimate: %.3f ГГц", fc / GHZ)
 
     candidates: list[tuple[float, float, float]] = []
     if fw is not None:
         candidates.append((fw, pw, abs(fw - f_rough)))
     if fa is not None:
         candidates.append((fa, pa, abs(fa - f_rough)))
+    if fc is not None:
+        candidates.append((fc, pc, abs(fc - f_rough)))
     if not candidates:
         return None
     # choose by amplitude, then by closeness to rough estimate
