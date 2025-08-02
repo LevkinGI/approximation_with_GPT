@@ -6,13 +6,27 @@ import math
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import least_squares
-from scipy.signal import welch, find_peaks, get_window
+from scipy.signal import welch, find_peaks, get_window, czt
 
 from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
 
 # Maximum acceptable fitting cost. Pairs with higher cost are rejected
 # and treated as unsuccessful.
-MAX_COST = 80
+MAX_COST = 120
+
+# Weight applied to the relative deviation between the HF/LF ratio obtained
+# from a candidate fit and the expected ratio.  Larger values make the
+# selection prefer frequency pairs that preserve the anticipated harmonic
+# relation even if the raw least‑squares cost is slightly worse.
+# Weight applied to ratio mismatch when ranking candidate fits.  The
+# penalty is relative to the best ratio found and therefore dimensionless.
+RATIO_PENALTY = 1.0
+
+# Acceptable bounds for the HF/LF frequency ratio.  Candidate fits outside
+# this window are strongly down‑weighted to avoid selecting harmonics that
+# are obviously unphysical (e.g. HF ≈ LF).
+RATIO_MIN = 1.5
+RATIO_MAX = 4.0
 
 
 def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
@@ -89,13 +103,35 @@ def _fft_spectrum(sig: np.ndarray, fs: float, *, window_name: str = "hamming",
     return freqs, asd
 
 
+def _parabolic_peak(freqs: np.ndarray, amps: np.ndarray, idx: int) -> float:
+    """Refine peak location using parabolic interpolation.
+
+    ``freqs`` must be uniformly spaced, as is the case for FFT bins.  The
+    function returns the interpolated frequency in Hz.  If the index is at a
+    boundary or the curvature is non-positive the original bin frequency is
+    returned.
+    """
+
+    if idx <= 0 or idx >= len(amps) - 1:
+        return float(freqs[idx])
+
+    y0, y1, y2 = amps[idx - 1], amps[idx], amps[idx + 1]
+    denom = y0 - 2 * y1 + y2
+    if denom <= 0:
+        return float(freqs[idx])
+
+    delta = 0.5 * (y0 - y2) / denom
+    df = freqs[1] - freqs[0]
+    return float(freqs[idx] + delta * df)
+
+
 def _peak_in_band(
     freqs: np.ndarray,
     amps: np.ndarray,
     fmin_GHz: float,
     fmax_GHz: float,
     *,
-    max_expansions: int = 1,
+    max_expansions: int = 3,
     expansion_step_GHz: float = 2.0,
 ) -> float | None:
     """Return peak frequency inside band or ``None`` if absent.
@@ -165,13 +201,13 @@ def _peak_in_band(
                     best_idx = (left + right) // 2
                 else:
                     best_idx = pk[idx]
-                f_best = float(f_band[best_idx])
+                f_best = _parabolic_peak(f_band, a_band, best_idx)
                 found_peak = True
                 break
 
         if not found_peak:
             max_idx = int(np.argmax(a_band))
-            f_best = float(f_band[max_idx])
+            f_best = _parabolic_peak(f_band, a_band, max_idx)
             logger.debug(
                 "no peaks found, fallback to max: f=%.3f ГГц, amp=%.3g",
                 f_best / GHZ,
@@ -283,18 +319,135 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         idx = np.argmax(avg_spec[mask])
         return float(freqs[mask][idx]), float(avg_spec[mask][idx])
 
+    def _czt_peak() -> tuple[float | None, float]:
+        """High-resolution spectral peak using the chirp z-transform."""
+        if len(y) < 512:
+            return None, 0.0
+        n = max(256, int(4 * (f_range[1] - f_range[0]) / df_min))
+        f1, f2 = f_range
+        w = np.exp(-1j * 2 * np.pi * (f2 - f1) / (n * fs))
+        a = np.exp(1j * 2 * np.pi * f1 / fs)
+        spec = np.abs(czt(y, n, w, a))
+        freqs = f1 + np.arange(n) * (f2 - f1) / n
+        if avoid is not None:
+            mask = np.abs(freqs - avoid) >= df_min
+        else:
+            mask = np.ones_like(freqs, dtype=bool)
+        if not np.any(mask):
+            return None, 0.0
+        idx = np.argmax(spec[mask])
+        return float(freqs[mask][idx]), float(spec[mask][idx])
+
+    def _music_peak() -> tuple[float | None, float]:
+        """Frequency estimate using a simple MUSIC spectral estimator."""
+        p = min(8, len(y) // 3)
+        if p < 2:
+            return None, 0.0
+        r = np.array([np.dot(y[: len(y) - k], y[k:]) for k in range(p)])
+        from scipy.linalg import toeplitz
+        R = toeplitz(r)
+        try:
+            w, v = np.linalg.eigh(R)
+        except np.linalg.LinAlgError:
+            return None, 0.0
+        En = v[:, :-1]
+        freqs = np.linspace(f_range[0], f_range[1], 512)
+        a = np.exp(-1j * 2 * np.pi * np.arange(p)[:, None] * freqs / fs)
+        ps = 1.0 / (np.sum(np.abs(En.conj().T @ a) ** 2, axis=0) + 1e-16)
+        if avoid is not None:
+            mask = np.abs(freqs - avoid) >= df_min
+        else:
+            mask = np.ones_like(freqs, dtype=bool)
+        if not np.any(mask):
+            return None, 0.0
+        idx = int(np.argmax(ps[mask]))
+        return float(freqs[mask][idx]), float(ps[mask][idx])
+
+    def _acf_peak() -> tuple[float | None, float]:
+        y0 = y - y.mean()
+        corr = np.correlate(y0, y0, mode="full")[len(y0)-1:]
+        lags = np.arange(len(corr)) / fs
+        fmax, fmin = f_range[1], f_range[0]
+        # convert frequency bounds to lag bounds
+        lag_min = 1.0 / fmax if fmax > 0 else lags[-1]
+        lag_max = 1.0 / fmin if fmin > 0 else lags[-1]
+        mask = (lags >= lag_min) & (lags <= lag_max)
+        if avoid is not None:
+            lag_avoid = 1.0 / avoid if avoid != 0 else 0.0
+            mask &= np.abs(lags - lag_avoid) >= df_min / (avoid**2 + 1e-16)
+        if not np.any(mask):
+            return None, 0.0
+        idx = np.argmax(corr[mask])
+        lag = lags[mask][idx]
+        if lag <= 0:
+            return None, 0.0
+        return float(1.0 / lag), float(corr[mask][idx] / (corr[0] + 1e-16))
+
+    def _zc_peak() -> tuple[float | None, float]:
+        """Estimate frequency from zero‑crossing intervals.
+
+        The signal is linearly interpolated around each sign change to obtain
+        sub‑sample crossing times.  The mean distance between every second
+        crossing corresponds to one full period.  This very time‑domain view is
+        largely insensitive to spectral leakage and provides a lightweight
+        fallback when frequency content is broad or heavily damped.
+        """
+
+        y0 = y - y.mean()
+        s = np.sign(y0)
+        crossings = np.where(np.diff(s) != 0)[0]
+        if crossings.size < 3:
+            return None, 0.0
+        t0 = t[crossings]
+        t1 = t[crossings + 1]
+        y0c = y0[crossings]
+        y1c = y0[crossings + 1]
+        zt = t0 - y0c * (t1 - t0) / (y1c - y0c)
+        if zt.size < 3:
+            return None, 0.0
+        periods = zt[2:] - zt[:-2]
+        if np.any(periods <= 0):
+            return None, 0.0
+        f_est = 1.0 / np.mean(periods)
+        if not (f_range[0] <= f_est <= f_range[1]):
+            return None, 0.0
+        if avoid is not None and abs(f_est - avoid) < df_min:
+            return None, 0.0
+        amp = float(np.max(np.abs(y0)))
+        return float(f_est), amp
+
     fw, pw = _welch_peak()
     if fw is not None:
         logger.debug("Welch estimate: %.3f ГГц", fw / GHZ)
     fa, pa = _avg_fft_peak()
     if fa is not None:
         logger.debug("AvgFFT estimate: %.3f ГГц", fa / GHZ)
+    fczt, pczt = _czt_peak()
+    if fczt is not None:
+        logger.debug("CZT estimate: %.3f ГГц", fczt / GHZ)
+    fm, pm = _music_peak()
+    if fm is not None:
+        logger.debug("MUSIC estimate: %.3f ГГц", fm / GHZ)
+    fc, pc = _acf_peak()
+    if fc is not None:
+        logger.debug("ACF estimate: %.3f ГГц", fc / GHZ)
+    fz, pz = _zc_peak()
+    if fz is not None:
+        logger.debug("ZC estimate: %.3f ГГц", fz / GHZ)
 
     candidates: list[tuple[float, float, float]] = []
     if fw is not None:
         candidates.append((fw, pw, abs(fw - f_rough)))
     if fa is not None:
         candidates.append((fa, pa, abs(fa - f_rough)))
+    if fczt is not None:
+        candidates.append((fczt, pczt, abs(fczt - f_rough)))
+    if fm is not None:
+        candidates.append((fm, pm, abs(fm - f_rough)))
+    if fc is not None:
+        candidates.append((fc, pc, abs(fc - f_rough)))
+    if fz is not None:
+        candidates.append((fz, pz, abs(fz - f_rough)))
     if not candidates:
         return None
     # choose by amplitude, then by closeness to rough estimate
@@ -529,9 +682,22 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                     for f, z in zip(f_all_hf[mask_hf], zeta_all_hf[mask_hf])]
         else:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
-            range_hf = (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ) if f2_rough is not None else HF_BAND
+            span = 10 * GHZ
+            if f2_rough is None or f2_rough < HF_BAND[0] or f2_rough > HF_BAND[1]:
+                range_hf = HF_BAND
+            else:
+                range_hf = (
+                    max(HF_BAND[0], f2_rough - span),
+                    min(HF_BAND[1], f2_rough + span),
+                )
             logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
-            f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_rough if f2_rough is not None else 0.0)
+            f2_fallback = _fallback_peak(
+                t_hf,
+                y_hf,
+                ds_hf.ts.meta.fs,
+                range_hf,
+                f2_rough if f2_rough is not None else 0.0,
+            )
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
             hf_c = [(f2_fallback, None)]
@@ -548,19 +714,48 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             lf_c = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_rough)
         else:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
-            range_lf = (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ) if f1_rough is not None else LF_BAND
+            span = 10 * GHZ
+            if f1_rough is None or f1_rough < LF_BAND[0] or f1_rough > LF_BAND[1]:
+                range_lf = LF_BAND
+            else:
+                range_lf = (
+                    max(LF_BAND[0], f1_rough - span),
+                    min(LF_BAND[1], f1_rough + span),
+                )
             logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
-            f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
-                                        range_lf, f1_rough if f1_rough is not None else 0.0,
-                                        avoid=hf_c[0][0] if hf_c else None)
+            f1_fallback = _fallback_peak(
+                t_lf,
+                y_lf,
+                ds_lf.ts.meta.fs,
+                range_lf,
+                f1_rough if f1_rough is not None else 0.0,
+                avoid=hf_c[0][0] if hf_c else None,
+            )
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
             lf_c = [(f1_fallback, None)]
         return lf_c, hf_c, None
 
     guess = None
+    target_ratio: float | None = None
     if ds_lf.root:
         guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
+
+    if guess is not None:
+        f1_guess, f2_guess = guess
+        ratio_guess = f2_guess / f1_guess if f1_guess > 0 else np.inf
+        if (
+            f1_guess < LF_BAND[0]
+            or f1_guess > LF_BAND[1]
+            or f2_guess < HF_BAND[0]
+            or f2_guess > HF_BAND[1]
+            or ratio_guess < RATIO_MIN
+            or ratio_guess > RATIO_MAX
+        ):
+            logger.debug("Предварительная оценка вне диапазона, игнорируется")
+            guess = None
+        else:
+            target_ratio = ratio_guess
 
     if guess is not None:
         f1_guess, f2_guess = guess
@@ -582,7 +777,14 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         hf_cand = _top2_nearest(f_all_hf[mask_hf], np.maximum(zeta_all_hf[mask_hf], 0.0), f2_guess) if np.any(mask_hf) else []
         if not hf_cand:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
-            range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
+            span = 10 * GHZ
+            if f2_guess < HF_BAND[0] or f2_guess > HF_BAND[1]:
+                range_hf = HF_BAND
+            else:
+                range_hf = (
+                    max(HF_BAND[0], f2_guess - span),
+                    min(HF_BAND[1], f2_guess + span),
+                )
             logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
             f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_guess)
             if f2_fallback is None:
@@ -600,7 +802,14 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         lf_cand = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_guess) if np.any(mask_lf) else []
         if not lf_cand:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
-            range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
+            span = 10 * GHZ
+            if f1_guess < LF_BAND[0] or f1_guess > LF_BAND[1]:
+                range_lf = LF_BAND
+            else:
+                range_lf = (
+                    max(LF_BAND[0], f1_guess - span),
+                    min(LF_BAND[1], f1_guess + span),
+                )
             logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
             f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
                                         range_lf, f1_guess,
@@ -661,6 +870,32 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         logger.warning(
             f"({ds_lf.temp_K}, {ds_lf.field_mT}): в полосе {range_hf} ГГц пиков не найдено")
 
+    # Occasionally the automatic FFT search returns a spurious HF peak
+    # far away from the LF component, especially when the true HF tone
+    # is weak.  If the ratio between the detected HF and LF peaks lies
+    # outside the physically plausible range we perform a secondary
+    # search constrained by this ratio.  This prevents the algorithm
+    # from jumping to very low or very high frequencies when the spectrum
+    # is dominated by noise.
+    if f1_hz is not None and f2_hz is not None:
+        ratio = f2_hz / f1_hz
+        if ratio < RATIO_MIN or ratio > RATIO_MAX:
+            fmin = max(HF_BAND[0] / GHZ, (f1_hz / GHZ) * RATIO_MIN)
+            fmax = min(HF_BAND[1] / GHZ, (f1_hz / GHZ) * RATIO_MAX)
+            logger.info(
+                "HF peak %.1f ГГц (ratio %.2f) outside expected bounds;"
+                " refining search to %.1f–%.1f ГГц",
+                f2_hz / GHZ,
+                ratio,
+                fmin,
+                fmax,
+            )
+            f2_alt = _peak_in_band(freqs_fft, amps_fft, fmin, fmax)
+            if f2_alt is not None:
+                f2_hz = f2_alt
+                logger.info("Refined HF peak at %.1f ГГц", f2_hz / GHZ)
+    if target_ratio is None and f1_hz is not None and f2_hz is not None and f1_hz > 0:
+        target_ratio = f2_hz / f1_hz
     def _append_unique(target_list, new_freq_hz):
         if new_freq_hz is None:
             return
@@ -676,7 +911,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f, z in hf_cand])
 
     seen: set[tuple[float, float]] = set()
-    best_cost = np.inf
+    best_score = np.inf
     best_fit = None
     for f1, z1 in lf_cand:
         for f2, z2 in hf_cand:
@@ -704,15 +939,31 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                     exc,
                 )
             else:
-                if cost < best_cost:
-                    best_cost = cost
+                ratio = fit.f2 / fit.f1 if fit.f1 != 0 else np.inf
+                if ratio < RATIO_MIN or ratio > RATIO_MAX:
+                    score = cost + 1e6  # effectively discard implausible ratios
+                else:
+                    score = cost
+                    if target_ratio is not None:
+                        score *= 1 + RATIO_PENALTY * abs(ratio - target_ratio) / target_ratio
+                if score < best_score:
+                    best_score = score
                     best_fit = fit
             finally:
                 seen.add((f1, f2))
     if best_fit is None and guess is not None:
-        logger.warning("(%d, %d): не удалось аппроксимировать с первым приближением, поиск альтернативы", ds_lf.temp_K, ds_lf.field_mT)
+        logger.warning(
+            "(%d, %d): не удалось аппроксимировать с первым приближением, поиск альтернативы",
+            ds_lf.temp_K,
+            ds_lf.field_mT,
+        )
+        # Re-run the candidate search to broaden the pool but keep the
+        # original target_ratio derived from FFT peaks or the initial
+        # guess.  Earlier versions overwrote target_ratio here using the
+        # first candidate pair, which could bias the selection toward
+        # spurious low-frequency ratios when ESPRIT misidentified peaks.
         lf_cand, hf_cand, freq_bounds = _search_candidates()
-        best_cost = np.inf
+        best_score = np.inf
         for f1, z1 in lf_cand:
             for f2, z2 in hf_cand:
                 if (f1, f2) in seen:
@@ -739,8 +990,15 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                         exc,
                     )
                 else:
-                    if cost < best_cost:
-                        best_cost = cost
+                    ratio = fit.f2 / fit.f1 if fit.f1 != 0 else np.inf
+                    if ratio < RATIO_MIN or ratio > RATIO_MAX:
+                        score = cost + 1e6
+                    else:
+                        score = cost
+                        if target_ratio is not None:
+                            score *= 1 + RATIO_PENALTY * abs(ratio - target_ratio) / target_ratio
+                    if score < best_score:
+                        best_score = score
                         best_fit = fit
                 finally:
                     seen.add((f1, f2))

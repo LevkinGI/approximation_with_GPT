@@ -36,7 +36,15 @@ C_M_S = 3e11
 
 # диапазоны частот НЧ и ВЧ
 LF_BAND = (8 * GHZ, 12 * GHZ)
-HF_BAND = (20 * GHZ, 80 * GHZ)
+# High-frequency band was previously set to 20–80 GHz which allowed
+# the search procedure to wander far into high ranges when spectral
+# peaks were weak or noisy.  Empirically the physically meaningful
+# HF component for the available data does not exceed ~40 GHz and may
+# drop close to the LF value at elevated temperatures.  Restrict the
+# automatic search to 8–40 GHz so that we still allow the HF tone to
+# converge near the LF region while avoiding spurious detections above
+# ~40 GHz.
+HF_BAND = (8 * GHZ, 40 * GHZ)
 FREQ_TAG = Literal["LF", "HF"]
 
 @dataclass(slots=True)
