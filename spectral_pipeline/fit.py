@@ -21,7 +21,10 @@ MAX_COST = 120
 # The penalty is normalised by ``RATIO_DEV_TOL`` so that a deviation of
 # that magnitude increases the score by roughly ``1 + RATIO_PENALTY``.
 # Keeping ``RATIO_PENALTY`` near 1 balances theory with fit quality.
-RATIO_PENALTY = 1.0
+# Increasing it strengthens the preference for ratios close to the
+# theoretical target.  ``2`` was found to noticeably reduce outliers
+# while still allowing the optimiser to recover from poor guesses.
+RATIO_PENALTY = 2.0
 
 # Acceptable bounds for the HF/LF frequency ratio.  Candidate fits outside
 # this window are strongly down‑weighted to avoid selecting harmonics that
@@ -32,7 +35,10 @@ RATIO_MAX = 4.0
 # Weight applied to the relative deviation from the theoretical frequency
 # guesses.  A value of zero disables the penalty while larger values keep the
 # optimisation closer to the expected frequencies derived from theory.
-GUESS_PENALTY = 1.0
+# The same reasoning as above applies – a value slightly above one makes
+# the search adhere to the supplied guesses unless a markedly better fit
+# exists elsewhere.
+GUESS_PENALTY = 2.0
 
 # Maximum allowed relative deviation from theoretical frequency guesses
 # before a candidate fit is considered implausible.  Deviations within this
@@ -963,7 +969,10 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                     score = cost
                     if target_ratio is not None and RATIO_DEV_TOL > 0:
                         devr = abs(ratio - target_ratio) / target_ratio
-                        score *= 1 + RATIO_PENALTY * (devr / RATIO_DEV_TOL)
+                        # Quadratic penalty sharply increases the score for
+                        # larger deviations while remaining gentle close to
+                        # the target ratio.
+                        score *= 1 + RATIO_PENALTY * (devr / RATIO_DEV_TOL) ** 2
                     if guess is not None:
                         f1g, f2g = guess
                         if f1g > 0 and f2g > 0:
@@ -973,7 +982,11 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                                 score = cost + 1e6
                             else:
                                 avg_dev = (dev1 + dev2) / 2
-                                score *= 1 + GUESS_PENALTY * (avg_dev / GUESS_DEV_TOL)
+                                # Apply a quadratic penalty for deviating from
+                                # the theoretical frequency guesses.  This keeps
+                                # the optimisation tightly anchored yet still
+                                # allows solutions within the tolerance window.
+                                score *= 1 + GUESS_PENALTY * (avg_dev / GUESS_DEV_TOL) ** 2
                 if score < best_score:
                     best_score = score
                     best_fit = fit
@@ -1025,7 +1038,10 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                         score = cost
                         if target_ratio is not None and RATIO_DEV_TOL > 0:
                             devr = abs(ratio - target_ratio) / target_ratio
-                            score *= 1 + RATIO_PENALTY * (devr / RATIO_DEV_TOL)
+                            # Same quadratic penalty for ratio deviation as
+                            # above to discourage harmonics far from the
+                            # theoretical expectation.
+                            score *= 1 + RATIO_PENALTY * (devr / RATIO_DEV_TOL) ** 2
                         if guess is not None:
                             f1g, f2g = guess
                             if f1g > 0 and f2g > 0:
@@ -1035,7 +1051,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                                     score = cost + 1e6
                                 else:
                                     avg_dev = (dev1 + dev2) / 2
-                                    score *= 1 + GUESS_PENALTY * (avg_dev / GUESS_DEV_TOL)
+                                    score *= 1 + GUESS_PENALTY * (avg_dev / GUESS_DEV_TOL) ** 2
                     if score < best_score:
                         best_score = score
                         best_fit = fit
