@@ -33,6 +33,11 @@ RATIO_MAX = 4.0
 # optimisation closer to the expected frequencies derived from theory.
 GUESS_PENALTY = 0.5
 
+# Maximum allowed relative deviation from theoretical frequency guesses
+# before a candidate fit is considered implausible.  Values exceeding this
+# threshold are heavily penalised and effectively discarded.
+GUESS_DEV_TOL = 0.05
+
 
 def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
     """Load first-approximation frequencies if file exists.
@@ -676,7 +681,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             (zeta_all_hf > -5e8)
             & (HF_BAND[0] <= f_all_hf)
             & (f_all_hf <= HF_BAND[1])
-            & (np.abs(f_all_hf - f2_rough) <= 7 * GHZ)
+            & (np.abs(f_all_hf - f2_rough) <= GUESS_DEV_TOL * f2_rough)
         )
         logger.debug("ESPRIT HF filtered: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
         if not np.any(mask_hf):
@@ -712,7 +717,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             (zeta_all_lf > 0)
             & (LF_BAND[0] <= f_all_lf)
             & (f_all_lf <= LF_BAND[1])
-            & (np.abs(f_all_lf - f1_rough) <= 5 * GHZ)
+            & (np.abs(f_all_lf - f1_rough) <= GUESS_DEV_TOL * f1_rough)
         )
         logger.debug("ESPRIT LF filtered: %s", np.round(f_all_lf[mask_lf] / GHZ, 3))
         if np.any(mask_lf):
@@ -773,7 +778,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             (zeta_all_hf > -5e8)
             & (HF_BAND[0] <= f_all_hf)
             & (f_all_hf <= HF_BAND[1])
-            & (np.abs(f_all_hf - f2_guess) <= 7 * GHZ)
+            & (np.abs(f_all_hf - f2_guess) <= GUESS_DEV_TOL * f2_guess)
         )
         logger.debug("ESPRIT HF filtered: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
         if not np.any(mask_hf):
@@ -801,7 +806,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             (zeta_all_lf > 0)
             & (LF_BAND[0] <= f_all_lf)
             & (f_all_lf <= LF_BAND[1])
-            & (np.abs(f_all_lf - f1_guess) <= 5 * GHZ)
+            & (np.abs(f_all_lf - f1_guess) <= GUESS_DEV_TOL * f1_guess)
         )
         logger.debug("ESPRIT LF filtered: %s", np.round(f_all_lf[mask_lf] / GHZ, 3))
         lf_cand = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_guess) if np.any(mask_lf) else []
@@ -829,8 +834,11 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             cands.append((freq, None))
         _ensure_guess(lf_cand, f1_guess)
         _ensure_guess(hf_cand, f2_guess)
-        freq_bounds = ((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
-                       (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
+        f1_lo = max(LF_BAND[0], f1_guess * (1 - GUESS_DEV_TOL))
+        f1_hi = min(LF_BAND[1], f1_guess * (1 + GUESS_DEV_TOL))
+        f2_lo = max(HF_BAND[0], f2_guess * (1 - GUESS_DEV_TOL))
+        f2_hi = min(HF_BAND[1], f2_guess * (1 + GUESS_DEV_TOL))
+        freq_bounds = ((f1_lo, f1_hi), (f2_lo, f2_hi))
     else:
         logger.info("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
@@ -848,10 +856,10 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         start_band_HF = 30.0
 
     if guess is not None:
-        lf_lo = (f1_guess - 5 * GHZ) / GHZ
-        lf_hi = (f1_guess + 5 * GHZ) / GHZ
-        hf_lo = (f2_guess - 5 * GHZ) / GHZ
-        hf_hi = (f2_guess + 5 * GHZ) / GHZ
+        lf_lo = f1_guess * (1 - GUESS_DEV_TOL) / GHZ
+        lf_hi = f1_guess * (1 + GUESS_DEV_TOL) / GHZ
+        hf_lo = f2_guess * (1 - GUESS_DEV_TOL) / GHZ
+        hf_hi = f2_guess * (1 + GUESS_DEV_TOL) / GHZ
         f1_hz = _peak_in_band(freqs_fft, amps_fft, lf_lo, lf_hi)
         f2_hz = _peak_in_band(freqs_fft, amps_fft, hf_lo, hf_hi)
         range_lf = f"{lf_lo:.0f}–{lf_hi:.0f}"
@@ -954,8 +962,12 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                     if guess is not None:
                         f1g, f2g = guess
                         if f1g > 0 and f2g > 0:
-                            dev = abs(fit.f1 - f1g) / f1g + abs(fit.f2 - f2g) / f2g
-                            score *= 1 + GUESS_PENALTY * dev / 2
+                            dev1 = abs(fit.f1 - f1g) / f1g
+                            dev2 = abs(fit.f2 - f2g) / f2g
+                            if dev1 > GUESS_DEV_TOL or dev2 > GUESS_DEV_TOL:
+                                score = cost + 1e6
+                            else:
+                                score *= 1 + GUESS_PENALTY * (dev1 + dev2) / 2
                 if score < best_score:
                     best_score = score
                     best_fit = fit
@@ -1007,6 +1019,15 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                         score = cost
                         if target_ratio is not None:
                             score *= 1 + RATIO_PENALTY * abs(ratio - target_ratio) / target_ratio
+                        if guess is not None:
+                            f1g, f2g = guess
+                            if f1g > 0 and f2g > 0:
+                                dev1 = abs(fit.f1 - f1g) / f1g
+                                dev2 = abs(fit.f2 - f2g) / f2g
+                                if dev1 > GUESS_DEV_TOL or dev2 > GUESS_DEV_TOL:
+                                    score = cost + 1e6
+                                else:
+                                    score *= 1 + GUESS_PENALTY * (dev1 + dev2) / 2
                     if score < best_score:
                         best_score = score
                         best_fit = fit
