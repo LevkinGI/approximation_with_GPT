@@ -339,6 +339,39 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
             return None, 0.0
         return float(1.0 / lag), float(corr[mask][idx] / (corr[0] + 1e-16))
 
+    def _zc_peak() -> tuple[float | None, float]:
+        """Estimate frequency from zero‑crossing intervals.
+
+        The signal is linearly interpolated around each sign change to obtain
+        sub‑sample crossing times.  The mean distance between every second
+        crossing corresponds to one full period.  This very time‑domain view is
+        largely insensitive to spectral leakage and provides a lightweight
+        fallback when frequency content is broad or heavily damped.
+        """
+
+        y0 = y - y.mean()
+        s = np.sign(y0)
+        crossings = np.where(np.diff(s) != 0)[0]
+        if crossings.size < 3:
+            return None, 0.0
+        t0 = t[crossings]
+        t1 = t[crossings + 1]
+        y0c = y0[crossings]
+        y1c = y0[crossings + 1]
+        zt = t0 - y0c * (t1 - t0) / (y1c - y0c)
+        if zt.size < 3:
+            return None, 0.0
+        periods = zt[2:] - zt[:-2]
+        if np.any(periods <= 0):
+            return None, 0.0
+        f_est = 1.0 / np.mean(periods)
+        if not (f_range[0] <= f_est <= f_range[1]):
+            return None, 0.0
+        if avoid is not None and abs(f_est - avoid) < df_min:
+            return None, 0.0
+        amp = float(np.max(np.abs(y0)))
+        return float(f_est), amp
+
     fw, pw = _welch_peak()
     if fw is not None:
         logger.debug("Welch estimate: %.3f ГГц", fw / GHZ)
@@ -348,6 +381,9 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
     fc, pc = _acf_peak()
     if fc is not None:
         logger.debug("ACF estimate: %.3f ГГц", fc / GHZ)
+    fz, pz = _zc_peak()
+    if fz is not None:
+        logger.debug("ZC estimate: %.3f ГГц", fz / GHZ)
 
     candidates: list[tuple[float, float, float]] = []
     if fw is not None:
@@ -356,6 +392,8 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         candidates.append((fa, pa, abs(fa - f_rough)))
     if fc is not None:
         candidates.append((fc, pc, abs(fc - f_rough)))
+    if fz is not None:
+        candidates.append((fz, pz, abs(fz - f_rough)))
     if not candidates:
         return None
     # choose by amplitude, then by closeness to rough estimate
