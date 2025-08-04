@@ -35,6 +35,10 @@ PI = math.pi
 C_M_S = 3e11
 
 # диапазоны частот НЧ и ВЧ
+# Эти значения используются как диапазоны по умолчанию.  Когда доступны
+# теоретические частотные зависимости, функция ``fit._load_guess``
+# заменяет их на диапазоны, охватывающие минимальное и максимальное
+# теоретические значения, расширенные на ±5 ГГц.
 LF_BAND = (8 * GHZ, 12 * GHZ)
 # High-frequency band was previously set to 20–80 GHz which allowed
 # the search procedure to wander far into high ranges when spectral

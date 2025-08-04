@@ -75,6 +75,21 @@ def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, flo
     axis = arr[0]
     hf = arr[1]
     lf = arr[2]
+
+    span = 5 * GHZ
+    hf_min = float(np.nanmin(hf)) * GHZ
+    hf_max = float(np.nanmax(hf)) * GHZ
+    lf_min = float(np.nanmin(lf)) * GHZ
+    lf_max = float(np.nanmax(lf)) * GHZ
+    new_lf_band = (max(0.0, lf_min - span), lf_max + span)
+    new_hf_band = (max(0.0, hf_min - span), hf_max + span)
+    import spectral_pipeline as sp
+    sp.LF_BAND = new_lf_band
+    sp.HF_BAND = new_hf_band
+    global LF_BAND, HF_BAND
+    LF_BAND = new_lf_band
+    HF_BAND = new_hf_band
+
     idx = int(np.argmin(np.abs(axis - axis_value)))
     f_lf_GHz = float(lf[idx])
     f_hf_GHz = float(hf[idx])

@@ -1,6 +1,8 @@
 import logging
 import numpy as np
+import pytest
 
+import spectral_pipeline as sp
 from spectral_pipeline import DataSet, TimeSeries, RecordMeta, FittingResult, GHZ
 from spectral_pipeline import fit
 
@@ -54,4 +56,22 @@ def test_no_debug_when_freqs_within_bounds(monkeypatch, tmp_path, caplog):
         fit.process_pair(lf, hf)
 
     assert not any("вне freq_bounds" in r.message for r in caplog.records)
+
+
+def test_guess_sets_search_bands(tmp_path, monkeypatch):
+    monkeypatch.setattr(fit, "LF_BAND", (8 * GHZ, 12 * GHZ))
+    monkeypatch.setattr(fit, "HF_BAND", (8 * GHZ, 40 * GHZ))
+    monkeypatch.setattr(sp, "LF_BAND", (8 * GHZ, 12 * GHZ))
+    monkeypatch.setattr(sp, "HF_BAND", (8 * GHZ, 40 * GHZ))
+    arr = np.array([
+        np.array([0.0, 1.0]),
+        np.array([30.0, 40.0]),
+        np.array([10.0, 11.0]),
+    ])
+    np.save(tmp_path / "H_1.npy", arr)
+    fit._load_guess(tmp_path, 1, 1)
+    assert fit.LF_BAND == pytest.approx((5 * GHZ, 16 * GHZ))
+    assert fit.HF_BAND == pytest.approx((25 * GHZ, 45 * GHZ))
+    assert sp.LF_BAND == fit.LF_BAND
+    assert sp.HF_BAND == fit.HF_BAND
 
