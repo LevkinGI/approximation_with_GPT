@@ -14,7 +14,12 @@ def test_no_debug_when_freqs_within_bounds(monkeypatch, tmp_path, caplog):
     lf = _make_ds("LF", tmp_path)
     hf = _make_ds("HF", tmp_path)
 
-    monkeypatch.setattr(fit, "_load_guess", lambda *args, **kwargs: (10 * GHZ, 40 * GHZ))
+    expected_bounds = ((5 * GHZ, 15 * GHZ), (35 * GHZ, 45 * GHZ))
+    monkeypatch.setattr(
+        fit,
+        "_load_guess",
+        lambda *args, **kwargs: (10 * GHZ, 40 * GHZ, *expected_bounds),
+    )
 
     def fake_esprit(r, fs, p=6):
         return np.array([10 * GHZ, 40 * GHZ]), np.array([1.0, 1.0])
@@ -31,6 +36,7 @@ def test_no_debug_when_freqs_within_bounds(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(fit, "_peak_in_band", lambda *a, **k: None)
 
     def fake_fit_pair(ds_lf, ds_hf, freq_bounds=None):
+        assert freq_bounds == expected_bounds
         res = FittingResult(
             f1=ds_lf.f1_init,
             f2=ds_hf.f2_init,
