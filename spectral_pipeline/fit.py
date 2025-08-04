@@ -565,17 +565,6 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     guess = None
     if ds_lf.root:
         guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
-    if guess is not None:
-        f1_guess, f2_guess = guess
-        if not (LF_BAND[0] <= f1_guess <= LF_BAND[1]) or not (HF_BAND[0] <= f2_guess <= HF_BAND[1]):
-            logger.info(
-                "(%d, %d): предварительные оценки вне диапазона, игнорируются f1=%.3f ГГц, f2=%.3f ГГц",
-                ds_lf.temp_K,
-                ds_lf.field_mT,
-                f1_guess / GHZ,
-                f2_guess / GHZ,
-            )
-            guess = None
 
     if guess is not None:
         f1_guess, f2_guess = guess
