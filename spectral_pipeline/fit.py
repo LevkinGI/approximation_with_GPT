@@ -22,9 +22,10 @@ MAX_COST = 120
 # that magnitude increases the score by roughly ``1 + RATIO_PENALTY``.
 # Keeping ``RATIO_PENALTY`` near 1 balances theory with fit quality.
 # Increasing it strengthens the preference for ratios close to the
-# theoretical target.  ``2`` was found to noticeably reduce outliers
-# while still allowing the optimiser to recover from poor guesses.
-RATIO_PENALTY = 2.0
+# theoretical target.  A smaller value relaxes this bias so that a
+# noticeably better fit can override disagreements with the expected
+# harmonic relation.
+RATIO_PENALTY = 0.5
 
 # Acceptable bounds for the HF/LF frequency ratio.  Candidate fits outside
 # this window are strongly down‑weighted to avoid selecting harmonics that
@@ -37,21 +38,24 @@ RATIO_MAX = 4.0
 # optimisation closer to the expected frequencies derived from theory.
 # The same reasoning as above applies – a value close to one gently nudges the
 # search towards the supplied guesses while still allowing the optimiser to
-# favour markedly better fits when the data disagrees with theory.
-GUESS_PENALTY = 1.0
+# favour markedly better fits when the data disagrees with theory.  A
+# lighter penalty grants the optimiser more freedom to deviate from the
+# initial guess when doing so reduces the residual error.
+GUESS_PENALTY = 0.25
 
 # Maximum allowed relative deviation from theoretical frequency guesses
 # before a candidate fit is considered implausible.  Deviations within this
 # tolerance are penalised proportionally, larger deviations are rejected.
-# A tight 5 % band keeps optimisation anchored to the theoretical model.
-GUESS_DEV_TOL = 0.05
+# A wider 15 % band lets the search explore around the theoretical model
+# when the data suggests a different optimum.
+GUESS_DEV_TOL = 0.15
 
 # Relative tolerance for deviations from the expected HF/LF ratio when a
 # theoretical ratio is available. The ratio penalty uses this value for
 # normalisation in the same way as the frequency guess penalty above.
-# Using the same 5 % window ensures harmonic relationships remain close to
-# their predicted values.
-RATIO_DEV_TOL = 0.05
+# Using the same 15 % window keeps harmonic relationships in check while
+# still allowing significant departures when they improve the fit.
+RATIO_DEV_TOL = 0.15
 
 
 def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
