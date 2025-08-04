@@ -43,12 +43,18 @@ RATIO_MAX = 4.0
 # initial guess when doing so reduces the residual error.
 GUESS_PENALTY = 0.25
 
-# Maximum allowed relative deviation from theoretical frequency guesses
-# before a candidate fit is considered implausible.  Deviations within this
-# tolerance are penalised proportionally, larger deviations are rejected.
-# A wider 15 % band lets the search explore around the theoretical model
-# when the data suggests a different optimum.
-GUESS_DEV_TOL = 0.15
+# Hard limit for how far the final fit is allowed to drift from the
+# theoretical prediction before additional penalty is applied.  Deviations
+# within this ±5 % band are deemed "not critical" and do not increase the
+# score.  Beyond the band the penalty grows quadratically.
+GUESS_DEV_TOL = 0.05
+
+# Broader tolerance used only during candidate search and window setup.  A
+# wider ±15 % corridor keeps alternatives on the table even when the true
+# signal is somewhat offset from the theoretical guess.  This value is
+# intentionally larger than ``GUESS_DEV_TOL`` to avoid prematurely rejecting
+# good fits that slightly violate theory.
+GUESS_SEARCH_TOL = 0.15
 
 # Relative tolerance for deviations from the expected HF/LF ratio when a
 # theoretical ratio is available. The ratio penalty uses this value for
@@ -711,7 +717,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             (zeta_all_hf > -5e8)
             & (HF_BAND[0] <= f_all_hf)
             & (f_all_hf <= HF_BAND[1])
-            & (np.abs(f_all_hf - f2_rough) <= GUESS_DEV_TOL * f2_rough)
+            & (np.abs(f_all_hf - f2_rough) <= GUESS_SEARCH_TOL * f2_rough)
         )
         logger.debug("ESPRIT HF filtered: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
         if not np.any(mask_hf):
@@ -747,7 +753,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             (zeta_all_lf > 0)
             & (LF_BAND[0] <= f_all_lf)
             & (f_all_lf <= LF_BAND[1])
-            & (np.abs(f_all_lf - f1_rough) <= GUESS_DEV_TOL * f1_rough)
+            & (np.abs(f_all_lf - f1_rough) <= GUESS_SEARCH_TOL * f1_rough)
         )
         logger.debug("ESPRIT LF filtered: %s", np.round(f_all_lf[mask_lf] / GHZ, 3))
         if np.any(mask_lf):
@@ -804,7 +810,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             (zeta_all_hf > -5e8)
             & (HF_BAND[0] <= f_all_hf)
             & (f_all_hf <= HF_BAND[1])
-            & (np.abs(f_all_hf - f2_guess) <= GUESS_DEV_TOL * f2_guess)
+            & (np.abs(f_all_hf - f2_guess) <= GUESS_SEARCH_TOL * f2_guess)
         )
         logger.debug("ESPRIT HF filtered: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
         if not np.any(mask_hf):
@@ -829,7 +835,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             (zeta_all_lf > 0)
             & (LF_BAND[0] <= f_all_lf)
             & (f_all_lf <= LF_BAND[1])
-            & (np.abs(f_all_lf - f1_guess) <= GUESS_DEV_TOL * f1_guess)
+            & (np.abs(f_all_lf - f1_guess) <= GUESS_SEARCH_TOL * f1_guess)
         )
         logger.debug("ESPRIT LF filtered: %s", np.round(f_all_lf[mask_lf] / GHZ, 3))
         lf_cand = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_guess) if np.any(mask_lf) else []
@@ -854,10 +860,10 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             cands.append((freq, None))
         _ensure_guess(lf_cand, f1_guess)
         _ensure_guess(hf_cand, f2_guess)
-        f1_lo = max(LF_BAND[0], f1_guess * (1 - GUESS_DEV_TOL))
-        f1_hi = min(LF_BAND[1], f1_guess * (1 + GUESS_DEV_TOL))
-        f2_lo = max(HF_BAND[0], f2_guess * (1 - GUESS_DEV_TOL))
-        f2_hi = min(HF_BAND[1], f2_guess * (1 + GUESS_DEV_TOL))
+        f1_lo = max(LF_BAND[0], f1_guess * (1 - GUESS_SEARCH_TOL))
+        f1_hi = min(LF_BAND[1], f1_guess * (1 + GUESS_SEARCH_TOL))
+        f2_lo = max(HF_BAND[0], f2_guess * (1 - GUESS_SEARCH_TOL))
+        f2_hi = min(HF_BAND[1], f2_guess * (1 + GUESS_SEARCH_TOL))
         freq_bounds = ((f1_lo, f1_hi), (f2_lo, f2_hi))
     else:
         logger.info("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
@@ -878,10 +884,10 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         start_band_HF = 30.0
 
     if guess is not None:
-        lf_lo = f1_guess * (1 - GUESS_DEV_TOL) / GHZ
-        lf_hi = f1_guess * (1 + GUESS_DEV_TOL) / GHZ
-        hf_lo = f2_guess * (1 - GUESS_DEV_TOL) / GHZ
-        hf_hi = f2_guess * (1 + GUESS_DEV_TOL) / GHZ
+        lf_lo = f1_guess * (1 - GUESS_SEARCH_TOL) / GHZ
+        lf_hi = f1_guess * (1 + GUESS_SEARCH_TOL) / GHZ
+        hf_lo = f2_guess * (1 - GUESS_SEARCH_TOL) / GHZ
+        hf_hi = f2_guess * (1 + GUESS_SEARCH_TOL) / GHZ
         f1_hz = _peak_in_band(freqs_fft, amps_fft, lf_lo, lf_hi, theory_GHz=f1_guess/GHZ)
         f2_hz = _peak_in_band(freqs_fft, amps_fft, hf_lo, hf_hi, theory_GHz=f2_guess/GHZ)
         range_lf = f"{lf_lo:.0f}–{lf_hi:.0f}"
@@ -1011,13 +1017,17 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                             dev1 = abs(fit.f1 - f1g) / f1g
                             dev2 = abs(fit.f2 - f2g) / f2g
                             avg_dev = (dev1 + dev2) / 2
-                            # Apply a quadratic penalty for deviating from the
-                            # theoretical frequency guesses.  Instead of
-                            # outright rejecting candidates outside the
-                            # tolerance band we down-weight them, allowing a
-                            # substantially better fit to override an
-                            # inaccurate guess.
-                            score *= 1 + GUESS_PENALTY * (avg_dev / GUESS_DEV_TOL) ** 2
+                            # Apply a quadratic penalty only when the
+                            # deviation exceeds the ``GUESS_DEV_TOL`` band.
+                            # Differences within ±5 % are considered
+                            # negligible.  Beyond that, the penalty grows
+                            # quadratically with the excess deviation so that
+                            # large departures from theory are discouraged but
+                            # still allowed when they yield a markedly better
+                            # residual.
+                            if avg_dev > GUESS_DEV_TOL:
+                                excess = (avg_dev - GUESS_DEV_TOL) / GUESS_DEV_TOL
+                                score *= 1 + GUESS_PENALTY * excess ** 2
                 if score < best_score:
                     best_score = score
                     best_fit = fit
@@ -1079,7 +1089,9 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                                 dev1 = abs(fit.f1 - f1g) / f1g
                                 dev2 = abs(fit.f2 - f2g) / f2g
                                 avg_dev = (dev1 + dev2) / 2
-                                score *= 1 + GUESS_PENALTY * (avg_dev / GUESS_DEV_TOL) ** 2
+                                if avg_dev > GUESS_DEV_TOL:
+                                    excess = (avg_dev - GUESS_DEV_TOL) / GUESS_DEV_TOL
+                                    score *= 1 + GUESS_PENALTY * excess ** 2
                     if score < best_score:
                         best_score = score
                         best_fit = fit
