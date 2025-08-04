@@ -35,10 +35,10 @@ RATIO_MAX = 4.0
 # Weight applied to the relative deviation from the theoretical frequency
 # guesses.  A value of zero disables the penalty while larger values keep the
 # optimisation closer to the expected frequencies derived from theory.
-# The same reasoning as above applies – a value slightly above one makes
-# the search adhere to the supplied guesses unless a markedly better fit
-# exists elsewhere.
-GUESS_PENALTY = 2.0
+# The same reasoning as above applies – a value close to one gently nudges the
+# search towards the supplied guesses while still allowing the optimiser to
+# favour markedly better fits when the data disagrees with theory.
+GUESS_PENALTY = 1.0
 
 # Maximum allowed relative deviation from theoretical frequency guesses
 # before a candidate fit is considered implausible.  Deviations within this
@@ -882,6 +882,18 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         f2_hz = _peak_in_band(freqs_fft, amps_fft, hf_lo, hf_hi, theory_GHz=f2_guess/GHZ)
         range_lf = f"{lf_lo:.0f}–{lf_hi:.0f}"
         range_hf = f"{hf_lo:.0f}–{hf_hi:.0f}"
+        if f1_hz is None:
+            logger.warning(
+                "(%d, %d): в узком диапазоне %s ГГц LF пик не найден, расширяем поиск", ds_lf.temp_K, ds_lf.field_mT, range_lf
+            )
+            f1_hz = _peak_in_band(freqs_fft, amps_fft, LF_BAND[0]/GHZ, LF_BAND[1]/GHZ)
+            range_lf = f"{LF_BAND[0]/GHZ:.0f}–{LF_BAND[1]/GHZ:.0f}"
+        if f2_hz is None:
+            logger.warning(
+                "(%d, %d): в узком диапазоне %s ГГц HF пик не найден, расширяем поиск", ds_lf.temp_K, ds_lf.field_mT, range_hf
+            )
+            f2_hz = _peak_in_band(freqs_fft, amps_fft, start_band_HF, HF_BAND[1]/GHZ)
+            range_hf = f"{start_band_HF:.0f}–{HF_BAND[1]/GHZ:.0f}"
     else:
         f1_hz = _peak_in_band(freqs_fft, amps_fft, LF_BAND[0]/GHZ, LF_BAND[1]/GHZ)
         f2_hz = _peak_in_band(freqs_fft, amps_fft, start_band_HF, HF_BAND[1]/GHZ)
@@ -994,15 +1006,14 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                         if f1g > 0 and f2g > 0:
                             dev1 = abs(fit.f1 - f1g) / f1g
                             dev2 = abs(fit.f2 - f2g) / f2g
-                            if dev1 > GUESS_DEV_TOL or dev2 > GUESS_DEV_TOL:
-                                score = cost + 1e6
-                            else:
-                                avg_dev = (dev1 + dev2) / 2
-                                # Apply a quadratic penalty for deviating from
-                                # the theoretical frequency guesses.  This keeps
-                                # the optimisation tightly anchored yet still
-                                # allows solutions within the tolerance window.
-                                score *= 1 + GUESS_PENALTY * (avg_dev / GUESS_DEV_TOL) ** 2
+                            avg_dev = (dev1 + dev2) / 2
+                            # Apply a quadratic penalty for deviating from the
+                            # theoretical frequency guesses.  Instead of
+                            # outright rejecting candidates outside the
+                            # tolerance band we down-weight them, allowing a
+                            # substantially better fit to override an
+                            # inaccurate guess.
+                            score *= 1 + GUESS_PENALTY * (avg_dev / GUESS_DEV_TOL) ** 2
                 if score < best_score:
                     best_score = score
                     best_fit = fit
@@ -1063,11 +1074,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                             if f1g > 0 and f2g > 0:
                                 dev1 = abs(fit.f1 - f1g) / f1g
                                 dev2 = abs(fit.f2 - f2g) / f2g
-                                if dev1 > GUESS_DEV_TOL or dev2 > GUESS_DEV_TOL:
-                                    score = cost + 1e6
-                                else:
-                                    avg_dev = (dev1 + dev2) / 2
-                                    score *= 1 + GUESS_PENALTY * (avg_dev / GUESS_DEV_TOL) ** 2
+                                avg_dev = (dev1 + dev2) / 2
+                                score *= 1 + GUESS_PENALTY * (avg_dev / GUESS_DEV_TOL) ** 2
                     if score < best_score:
                         best_score = score
                         best_fit = fit
