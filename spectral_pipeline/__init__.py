@@ -34,9 +34,11 @@ PI = math.pi
 # скорость света, мм/с (используется при расчёте времени)
 C_M_S = 3e11
 
-# диапазоны частот НЧ и ВЧ
-LF_BAND = (8 * GHZ, 12 * GHZ)
-HF_BAND = (20 * GHZ, 80 * GHZ)
+# диапазон допустимых частот
+# Оба диапазона LF и HF используют одинаковые границы 0–40 ГГц
+FREQ_BAND = (0 * GHZ, 40 * GHZ)
+LF_BAND = FREQ_BAND
+HF_BAND = FREQ_BAND
 FREQ_TAG = Literal["LF", "HF"]
 
 @dataclass(slots=True)
@@ -103,5 +105,5 @@ class DataSet:
 __all__ = [
     "DataSet", "FittingResult", "RecordMeta", "TimeSeries",
     "GHZ", "NS", "PI", "FREQ_TAG", "logger", "LOG_PATH",
-    "C_M_S", "LF_BAND", "HF_BAND",
+    "C_M_S", "FREQ_BAND", "LF_BAND", "HF_BAND",
 ]
