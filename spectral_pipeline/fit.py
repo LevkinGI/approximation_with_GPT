@@ -12,7 +12,7 @@ from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
 
 # Maximum acceptable fitting cost. Pairs with higher cost are rejected
 # and treated as unsuccessful.
-MAX_COST = 80
+MAX_COST = 100
 
 
 def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
@@ -249,8 +249,12 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         root = roots[np.argmax(np.abs(roots))]
         f_burg = abs(np.angle(root)) * fs / (2 * np.pi)
         logger.debug("Burg estimate: %.3f ГГц", f_burg / GHZ)
-        if f_range[0] <= f_burg <= f_range[1] and \
-           (avoid is None or abs(f_burg - avoid) >= df_min):
+        if (
+            f_burg > 0
+            and np.isfinite(f_burg)
+            and f_range[0] <= f_burg <= f_range[1]
+            and (avoid is None or abs(f_burg - avoid) >= df_min)
+        ):
             return float(f_burg)
     except Exception as exc:
         logger.debug("Burg failed: %s", exc)
