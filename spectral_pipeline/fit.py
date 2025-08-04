@@ -8,11 +8,22 @@ from numpy.typing import NDArray
 from scipy.optimize import least_squares
 from scipy.signal import welch, find_peaks, get_window
 
-from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
+from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND, FREQ_BAND
 
 # Maximum acceptable fitting cost. Pairs with higher cost are rejected
 # and treated as unsuccessful.
 MAX_COST = 100
+
+
+FREQ_MIN, FREQ_MAX = FREQ_BAND
+
+
+def _clip_band(band: tuple[float, float]) -> tuple[float, float]:
+    """Clip frequency band to global 0–40 ГГц range (in Hz)."""
+    lo, hi = band
+    lo = max(FREQ_MIN, lo)
+    hi = min(FREQ_MAX, hi)
+    return lo, hi
 
 
 def _load_guess(
@@ -52,13 +63,15 @@ def _load_guess(
     idx = int(np.argmin(np.abs(axis - axis_value)))
     f_lf_GHz = float(lf[idx])
     f_hf_GHz = float(hf[idx])
+    f_lf_GHz = min(max(f_lf_GHz, FREQ_MIN / GHZ), FREQ_MAX / GHZ)
+    f_hf_GHz = min(max(f_hf_GHz, FREQ_MIN / GHZ), FREQ_MAX / GHZ)
     # диапазоны поиска: [min,max] теоретических значений ± 5 ГГц
     lf_min = float(np.nanmin(lf)) - 5.0
     lf_max = float(np.nanmax(lf)) + 5.0
     hf_min = float(np.nanmin(hf)) - 5.0
     hf_max = float(np.nanmax(hf)) + 5.0
-    lf_band = (lf_min * GHZ, lf_max * GHZ)
-    hf_band = (hf_min * GHZ, hf_max * GHZ)
+    lf_band = _clip_band((lf_min * GHZ, lf_max * GHZ))
+    hf_band = _clip_band((hf_min * GHZ, hf_max * GHZ))
     return f_lf_GHz * GHZ, f_hf_GHz * GHZ, lf_band, hf_band
 
 def burg(x: NDArray, order: int = 8):
@@ -124,6 +137,8 @@ def _peak_in_band(
 
     expansions = 0
     while True:
+        fmin_GHz = max(FREQ_MIN / GHZ, fmin_GHz)
+        fmax_GHz = min(FREQ_MAX / GHZ, fmax_GHz)
         logger.info("FFT peak search: %.1f–%.1f ГГц", fmin_GHz, fmax_GHz)
         mask = (freqs >= fmin_GHz * GHZ) & (freqs <= fmax_GHz * GHZ)
         if not mask.any():
@@ -201,8 +216,8 @@ def _peak_in_band(
         ):
             if expansions < max_expansions:
                 expansions += 1
-                fmin_GHz -= expansion_step_GHz
-                fmax_GHz += expansion_step_GHz
+                fmin_GHz = max(FREQ_MIN / GHZ, fmin_GHz - expansion_step_GHz)
+                fmax_GHz = min(FREQ_MAX / GHZ, fmax_GHz + expansion_step_GHz)
                 logger.info(
                     "Peak near boundary, expanding search to %.1f–%.1f ГГц (attempt %d/%d)",
                     fmin_GHz,
@@ -382,6 +397,8 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
              freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
+    lf_band = _clip_band(LF_BAND)
+    hf_band = _clip_band(HF_BAND)
 
     def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
         if t.size == 0:
@@ -433,8 +450,8 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     ])
 
     if freq_bounds is None:
-        f1_lo, f1_hi = f1_init * 0.9, f1_init * 1.2
-        f2_lo, f2_hi = f2_init * 0.9, f2_init * 1.2
+        f1_lo, f1_hi = _clip_band((f1_init * 0.9, f1_init * 1.2))
+        f2_lo, f2_hi = _clip_band((f2_init * 0.9, f2_init * 1.2))
     else:
         (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
 
@@ -549,7 +566,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                     for f, z in zip(f_all_hf[mask_hf], zeta_all_hf[mask_hf])]
         else:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
-            range_hf = (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ) if f2_rough is not None else hf_band
+            range_hf = _clip_band((f2_rough - 5 * GHZ, f2_rough + 5 * GHZ)) if f2_rough is not None else hf_band
             logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
             f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_rough if f2_rough is not None else 0.0)
             if f2_fallback is None:
@@ -568,7 +585,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             lf_c = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_rough)
         else:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
-            range_lf = (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ) if f1_rough is not None else lf_band
+            range_lf = _clip_band((f1_rough - 5 * GHZ, f1_rough + 5 * GHZ)) if f1_rough is not None else lf_band
             logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
             f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
                                         range_lf, f1_rough if f1_rough is not None else 0.0,
@@ -584,6 +601,10 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
 
     if guess is not None:
         f1_guess, f2_guess, lf_band, hf_band = guess
+        lf_band = _clip_band(lf_band)
+        hf_band = _clip_band(hf_band)
+        lf_band = _clip_band(lf_band)
+        hf_band = _clip_band(hf_band)
         logger.info(
             "(%d, %d): использованы предварительные оценки f1=%.3f ГГц, f2=%.3f ГГц",
             ds_lf.temp_K, ds_lf.field_mT, f1_guess/GHZ, f2_guess/GHZ)
@@ -602,7 +623,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         hf_cand = _top2_nearest(f_all_hf[mask_hf], np.maximum(zeta_all_hf[mask_hf], 0.0), f2_guess) if np.any(mask_hf) else []
         if not hf_cand:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
-            range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
+            range_hf = _clip_band((f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
             logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
             f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_guess)
             if f2_fallback is None:
@@ -620,7 +641,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         lf_cand = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_guess) if np.any(mask_lf) else []
         if not lf_cand:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
-            range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
+            range_lf = _clip_band((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ))
             logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
             f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
                                         range_lf, f1_guess,
@@ -874,8 +895,8 @@ def fit_single(ds: DataSet,
     ])
 
     if freq_bounds is None:
-        f1_lo, f1_hi = f1_init * 0.9, f1_init * 1.2
-        f2_lo, f2_hi = f2_init * 0.9, f2_init * 1.2
+        f1_lo, f1_hi = _clip_band((f1_init * 0.9, f1_init * 1.2))
+        f2_lo, f2_hi = _clip_band((f2_init * 0.9, f2_init * 1.2))
     else:
         (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
 
@@ -977,8 +998,8 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
         ds_lf.field_mT,
     )
     t, y = ds_lf.ts.t, ds_lf.ts.s
-    lf_band = LF_BAND
-    hf_band = HF_BAND
+    lf_band = _clip_band(LF_BAND)
+    hf_band = _clip_band(HF_BAND)
 
     def _search_candidates_single() -> tuple[
         list[tuple[float, Optional[float]]],
@@ -1016,7 +1037,7 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
                 f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для HF (LF only)"
             )
             range_hf = (
-                (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ)
+                _clip_band((f2_rough - 5 * GHZ, f2_rough + 5 * GHZ))
                 if f2_rough is not None
                 else hf_band
             )
@@ -1051,7 +1072,7 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
                 f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF (LF only)"
             )
             range_lf = (
-                (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ)
+                _clip_band((f1_rough - 5 * GHZ, f1_rough + 5 * GHZ))
                 if f1_rough is not None
                 else lf_band
             )
@@ -1104,7 +1125,7 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
             logger.warning(
                 f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для HF (LF only)"
             )
-            range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
+            range_hf = _clip_band((f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
             logger.info(
                 "HF fallback range: %.1f–%.1f ГГц",
                 range_hf[0] / GHZ,
@@ -1129,7 +1150,7 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
             logger.warning(
                 f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF (LF only)"
             )
-            range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
+            range_lf = _clip_band((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ))
             logger.info(
                 "LF fallback range: %.1f–%.1f ГГц",
                 range_lf[0] / GHZ,

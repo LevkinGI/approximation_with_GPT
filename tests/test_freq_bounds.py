@@ -14,7 +14,7 @@ def test_no_debug_when_freqs_within_bounds(monkeypatch, tmp_path, caplog):
     lf = _make_ds("LF", tmp_path)
     hf = _make_ds("HF", tmp_path)
 
-    expected_bounds = ((5 * GHZ, 15 * GHZ), (35 * GHZ, 45 * GHZ))
+    expected_bounds = ((5 * GHZ, 15 * GHZ), (35 * GHZ, 40 * GHZ))
     monkeypatch.setattr(
         fit,
         "_load_guess",
