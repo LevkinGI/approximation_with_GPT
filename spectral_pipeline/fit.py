@@ -12,7 +12,7 @@ from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
 
 # Maximum acceptable fitting cost. Pairs with higher cost are rejected
 # and treated as unsuccessful.
-MAX_COST = 80
+MAX_COST = 100
 
 
 def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
@@ -249,8 +249,12 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         root = roots[np.argmax(np.abs(roots))]
         f_burg = abs(np.angle(root)) * fs / (2 * np.pi)
         logger.debug("Burg estimate: %.3f ГГц", f_burg / GHZ)
-        if f_range[0] <= f_burg <= f_range[1] and \
-           (avoid is None or abs(f_burg - avoid) >= df_min):
+        if (
+            f_burg > 0
+            and np.isfinite(f_burg)
+            and f_range[0] <= f_burg <= f_range[1]
+            and (avoid is None or abs(f_burg - avoid) >= df_min)
+        ):
             return float(f_burg)
     except Exception as exc:
         logger.debug("Burg failed: %s", exc)
@@ -561,6 +565,17 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     guess = None
     if ds_lf.root:
         guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
+    if guess is not None:
+        f1_guess, f2_guess = guess
+        if not (LF_BAND[0] <= f1_guess <= LF_BAND[1]) or not (HF_BAND[0] <= f2_guess <= HF_BAND[1]):
+            logger.info(
+                "(%d, %d): предварительные оценки вне диапазона, игнорируются f1=%.3f ГГц, f2=%.3f ГГц",
+                ds_lf.temp_K,
+                ds_lf.field_mT,
+                f1_guess / GHZ,
+                f2_guess / GHZ,
+            )
+            guess = None
 
     if guess is not None:
         f1_guess, f2_guess = guess
