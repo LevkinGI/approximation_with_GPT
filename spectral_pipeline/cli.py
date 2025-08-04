@@ -3,13 +3,44 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Tuple, Dict
 import logging
+from functools import lru_cache
+
+import numpy as np
 import pandas as pd
 from openpyxl.styles import Border, Side, Alignment
 
 from . import DataSet, GHZ, logger, LOG_PATH
 from .io import load_records
-from .fit import process_pair
+from .fit import process_pair, process_lf_only
 from .plotting import visualize_without_spectra, visualize_stacked
+
+
+@lru_cache(maxsize=None)
+def _find_crossing(root: str, field_mT: int, temp_K: int):
+    """Return axis type and value where HF and LF curves intersect.
+
+    Searches first-approximation files ``H_{field}.npy`` or ``T_{temp}.npy``
+    located in ``root``.  If intersection is not found, returns ``None``.
+    """
+    path_root = Path(root)
+    path_H = path_root / f"H_{field_mT}.npy"
+    path_T = path_root / f"T_{temp_K}.npy"
+    arr = None
+    axis_name = None
+    if path_H.exists():
+        arr = np.load(path_H)
+        axis_name = "T"
+    elif path_T.exists():
+        arr = np.load(path_T)
+        axis_name = "H"
+    if arr is None or arr.shape[0] < 3:
+        return None
+    axis, hf, lf = arr[0], arr[1], arr[2]
+    diff = hf - lf
+    idx = np.where(diff <= 0)[0]
+    if idx.size:
+        return axis_name, float(axis[idx[0]])
+    return None
 
 
 def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
@@ -72,8 +103,29 @@ def main(data_dir: str = '.', *, return_datasets: bool = False,
     triples: List[Tuple[DataSet, DataSet]] = []
     success_count = 0
     for key, pair in grouped.items():
-        if 'LF' in pair and 'HF' in pair:
-            ds_lf, ds_hf = pair['LF'], pair['HF']
+        if 'LF' not in pair:
+            continue
+        ds_lf = pair['LF']
+        ds_hf = pair.get('HF')
+        cross = _find_crossing(str(root), ds_lf.field_mT, ds_lf.temp_K)
+        use_lf_only = False
+        if cross is not None:
+            axis, val = cross
+            if axis == 'T' and ds_lf.temp_K >= val:
+                use_lf_only = True
+            if axis == 'H' and ds_lf.field_mT >= val:
+                use_lf_only = True
+        if use_lf_only or ds_hf is None:
+            try:
+                fit = process_lf_only(ds_lf)
+            except Exception as e:
+                logger.error("Ошибка обработки %s: %s", key, e)
+            else:
+                if fit is not None:
+                    success_count += 1
+                    ds_hf = ds_hf or ds_lf
+                    triples.append((ds_lf, ds_hf))
+        else:
             try:
                 fit = process_pair(ds_lf, ds_hf)
             except Exception as e:
