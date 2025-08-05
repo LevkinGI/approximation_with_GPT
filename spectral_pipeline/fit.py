@@ -451,13 +451,15 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         tau2_init = 1.0 / ds_hf.zeta2
         tau2_lo, tau2_hi = tau2_init * 0.8, tau2_init * 1.2
 
-    C_lf_init = np.mean(y_lf)
+    k_lf_init = 1.0
     k_hf_init = 1.0
+    C_lf_init = np.mean(y_lf)
     C_hf_init = np.mean(y_hf)
 
     p0 = np.array([
-        C_lf_init,
+        k_lf_init,
         k_hf_init,
+        C_lf_init,
         C_hf_init,
         A1_init,
         A2_init,
@@ -476,8 +478,9 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
 
     lo = np.array([
-        C_lf_init - np.std(y_lf),
         0.5,
+        0.5,
+        C_lf_init - np.std(y_lf),
         C_hf_init - np.std(y_hf),
         0.0,
         0.0,
@@ -489,8 +492,9 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         -PI,
     ])
     hi = np.array([
-        C_lf_init + np.std(y_lf),
         2.0,
+        2.0,
+        C_lf_init + np.std(y_lf),
         C_hf_init + np.std(y_hf),
         A1_init * 2,
         A2_init * 2,
@@ -504,8 +508,9 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     def residuals(p):
         (
-            C_lf,
+            k_lf,
             k_hf,
+            C_lf,
             C_hf,
             A1,
             A2,
@@ -519,7 +524,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
         core_lf = _core_signal(t_lf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
         core_hf = _core_signal(t_hf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        res_lf = w_lf * (core_lf + C_lf - y_lf)
+        res_lf = w_lf * (k_lf * core_lf + C_lf - y_lf)
         res_hf = k_hf * core_hf + C_hf - y_hf
         return np.concatenate([res_lf, res_hf])
 
@@ -543,14 +548,15 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     except np.linalg.LinAlgError:
         cov = np.full((n, n), np.nan)
 
-    idx_f1 = 7
-    idx_f2 = 8
+    idx_f1 = 8
+    idx_f2 = 9
     sigma_f1 = math.sqrt(abs(cov[idx_f1, idx_f1]))
     sigma_f2 = math.sqrt(abs(cov[idx_f2, idx_f2]))
 
     (
-        C_lf,
+        k_lf,
         k_hf,
+        C_lf,
         C_hf,
         A1,
         A2,
@@ -574,7 +580,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         phi2=phi2_fin,
         A1=A1,
         A2=A2,
-        k_lf=1.0,
+        k_lf=k_lf,
         k_hf=k_hf,
         C_lf=C_lf,
         C_hf=C_hf,
