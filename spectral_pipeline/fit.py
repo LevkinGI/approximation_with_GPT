@@ -95,7 +95,7 @@ def _peak_in_band(
     fmin_GHz: float,
     fmax_GHz: float,
     *,
-    max_expansions: int = 1,
+    max_expansions: int = 3,
     expansion_step_GHz: float = 2.0,
 ) -> float | None:
     """Return peak frequency inside band or ``None`` if absent.
@@ -683,8 +683,10 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             cands.append((freq, None))
         _ensure_guess(lf_cand, f1_guess)
         _ensure_guess(hf_cand, f2_guess)
-        freq_bounds = ((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
-                       (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
+        freq_bounds = (
+            (f1_guess * 0.5, f1_guess * 1.5),
+            (f2_guess * 0.5, f2_guess * 1.5),
+        )
     else:
         logger.info("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
@@ -1019,6 +1021,9 @@ def fit_single(ds: DataSet,
     )
 
 
+
+
+
 def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
     logger.info(
         "LF-only обработка пары T=%d K, H=%d mT",
@@ -1026,270 +1031,105 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
         ds_lf.field_mT,
     )
     t, y = ds_lf.ts.t, ds_lf.ts.s
+    fs = ds_lf.ts.meta.fs
 
-    def _search_candidates_single() -> tuple[
-        list[tuple[float, Optional[float]]],
-        list[tuple[float, Optional[float]]],
-        tuple[tuple[float, float], tuple[float, float]] | None,
-    ]:
-        f1_rough, phi1, A1, tau1 = _single_sine_refine(t, y, f0=10 * GHZ)
-        proto = A1 * np.exp(-t / tau1) * np.cos(2 * np.pi * f1_rough * t + phi1)
-        residual = y - proto
-        f2_rough, _, _, _ = _single_sine_refine(t, residual, f0=40 * GHZ)
-        logger.debug(
-            "Rough estimates (LF only): f1=%.3f ГГц, f2=%.3f ГГц",
-            f1_rough / GHZ,
-            f2_rough / GHZ,
-        )
-        spec_hf = residual - np.mean(residual)
-        f_all_hf, zeta_all_hf = _esprit_freqs_and_decay(spec_hf, ds_lf.ts.meta.fs)
-        mask_hf = (
-            (zeta_all_hf > -5e8)
-            & (HF_BAND[0] <= f_all_hf)
-            & (f_all_hf <= HF_BAND[1])
-            & (np.abs(f_all_hf - f2_rough) <= 7 * GHZ)
-        )
-        logger.debug(
-            "ESPRIT HF filtered (LF only): %s",
-            np.round(f_all_hf[mask_hf] / GHZ, 3),
-        )
-        if np.any(mask_hf):
-            hf_c = [
-                (f, z if z > 0 else None)
-                for f, z in zip(f_all_hf[mask_hf], zeta_all_hf[mask_hf])
-            ]
-        else:
-            logger.warning(
-                f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для HF (LF only)"
-            )
-            range_hf = (
-                (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ)
-                if f2_rough is not None
-                else HF_BAND
-            )
-            logger.info(
-                "HF fallback range: %.1f–%.1f ГГц",
-                range_hf[0] / GHZ,
-                range_hf[1] / GHZ,
-            )
-            f2_fallback = _fallback_peak(
-                t, residual, ds_lf.ts.meta.fs, range_hf, f2_rough if f2_rough is not None else 0.0
-            )
-            if f2_fallback is None:
-                raise RuntimeError("HF-тон не найден")
-            hf_c = [(f2_fallback, None)]
-
-        spec_lf = y - np.mean(y)
-        f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
-        mask_lf = (
-            (zeta_all_lf > 0)
-            & (LF_BAND[0] <= f_all_lf)
-            & (f_all_lf <= LF_BAND[1])
-            & (np.abs(f_all_lf - f1_rough) <= 5 * GHZ)
-        )
-        logger.debug(
-            "ESPRIT LF filtered (LF only): %s",
-            np.round(f_all_lf[mask_lf] / GHZ, 3),
-        )
-        if np.any(mask_lf):
-            lf_c = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_rough)
-        else:
-            logger.warning(
-                f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF (LF only)"
-            )
-            range_lf = (
-                (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ)
-                if f1_rough is not None
-                else LF_BAND
-            )
-            logger.info(
-                "LF fallback range: %.1f–%.1f ГГц",
-                range_lf[0] / GHZ,
-                range_lf[1] / GHZ,
-            )
-            f1_fallback = _fallback_peak(
-                t,
-                y,
-                ds_lf.ts.meta.fs,
-                range_lf,
-                f1_rough if f1_rough is not None else 0.0,
-                avoid=hf_c[0][0] if hf_c else None,
-            )
-            if f1_fallback is None:
-                raise RuntimeError("LF-тон не найден")
-            lf_c = [(f1_fallback, None)]
-        return lf_c, hf_c, None
-
+    # Try to load initial guesses for both frequencies
     guess = None
     if ds_lf.root:
         guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
-
     if guess is not None:
         f1_guess, f2_guess = guess
-        logger.info(
-            "(%d, %d): использованы предварительные оценки f1=%.3f ГГц, f2=%.3f ГГц",
-            ds_lf.temp_K,
-            ds_lf.field_mT,
-            f1_guess / GHZ,
-            f2_guess / GHZ,
-        )
-        f1_rough, phi1, A1, tau1 = _single_sine_refine(t, y, f1_guess)
-        proto = A1 * np.exp(-t / tau1) * np.cos(2 * PI * f1_rough * t + phi1)
-        residual = y - proto
-        spec_hf = residual - np.mean(residual)
-        f_all_hf, zeta_all_hf = _esprit_freqs_and_decay(spec_hf, ds_lf.ts.meta.fs)
-        mask_hf = (
-            (zeta_all_hf > -5e8)
-            & (HF_BAND[0] <= f_all_hf)
-            & (f_all_hf <= HF_BAND[1])
-            & (np.abs(f_all_hf - f2_guess) <= 7 * GHZ)
-        )
-        hf_cand = _top2_nearest(
-            f_all_hf[mask_hf], np.maximum(zeta_all_hf[mask_hf], 0.0), f2_guess
-        ) if np.any(mask_hf) else []
-        if not hf_cand:
-            logger.warning(
-                f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для HF (LF only)"
-            )
-            range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
-            logger.info(
-                "HF fallback range: %.1f–%.1f ГГц",
-                range_hf[0] / GHZ,
-                range_hf[1] / GHZ,
-            )
-            f2_fallback = _fallback_peak(
-                t, residual, ds_lf.ts.meta.fs, range_hf, f2_guess
-            )
-            if f2_fallback is None:
-                raise RuntimeError("HF-тон не найден")
-            hf_cand = [(f2_fallback, None)]
-        spec_lf = y - np.mean(y)
-        f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
-        mask_lf = (
-            (zeta_all_lf > 0)
-            & (LF_BAND[0] <= f_all_lf)
-            & (f_all_lf <= LF_BAND[1])
-            & (np.abs(f_all_lf - f1_guess) <= 5 * GHZ)
-        )
-        lf_cand = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_guess) if np.any(mask_lf) else []
-        if not lf_cand:
-            logger.warning(
-                f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF (LF only)"
-            )
-            range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
-            logger.info(
-                "LF fallback range: %.1f–%.1f ГГц",
-                range_lf[0] / GHZ,
-                range_lf[1] / GHZ,
-            )
-            f1_fallback = _fallback_peak(
-                t,
-                y,
-                ds_lf.ts.meta.fs,
-                range_lf,
-                f1_guess,
-                avoid=hf_cand[0][0] if hf_cand else None,
-            )
-            if f1_fallback is None:
-                raise RuntimeError("LF-тон не найден")
-            lf_cand = [(f1_fallback, None)]
-
-        def _ensure_guess(cands, freq):
-            for f, _ in cands:
-                if abs(f - freq) < 20e6:
-                    return
-            cands.append((freq, None))
-
-        _ensure_guess(lf_cand, f1_guess)
-        _ensure_guess(hf_cand, f2_guess)
         freq_bounds = (
-            (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
-            (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ),
+            (f1_guess * 0.5, f1_guess * 1.5),
+            (f2_guess * 0.5, f2_guess * 1.5),
         )
     else:
-        logger.info(
-            "(%d, %d): поиск предварительных оценок (LF only)",
-            ds_lf.temp_K,
-            ds_lf.field_mT,
-        )
-        lf_cand, hf_cand, freq_bounds = _search_candidates_single()
+        f1_guess = f2_guess = None
+        freq_bounds = None
 
-    seen: set[tuple[float, float]] = set()
-    best_cost = np.inf
-    best_fit = None
-    for f1, z1 in lf_cand:
-        for f2, z2 in hf_cand:
-            if (f1, f2) in seen:
-                continue
-            if freq_bounds is not None:
-                (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
-                if not (f1_lo <= f1 <= f1_hi and f2_lo <= f2 <= f2_hi):
-                    seen.add((f1, f2))
-                    continue
-            ds_lf.f1_init, ds_lf.zeta1 = f1, z1
-            ds_lf.f2_init, ds_lf.zeta2 = f2, z2
-            try:
-                fit, cost = fit_single(ds_lf, freq_bounds=freq_bounds)
-            except Exception as exc:
-                logger.debug(
-                    "Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s",
-                    f1 / GHZ,
-                    f2 / GHZ,
-                    exc,
-                )
-            else:
-                if cost < best_cost:
-                    best_cost = cost
-                    best_fit = fit
-            finally:
-                seen.add((f1, f2))
+    # ESPRIT to get candidate frequencies
+    spec = y - np.mean(y)
+    f_all, zeta_all = _esprit_freqs_and_decay(spec, fs)
+    mask = (zeta_all > 0) & (LF_BAND[0] <= f_all) & (f_all <= LF_BAND[1])
+    if not np.any(mask):
+        raise RuntimeError("LF-тоны не найдены ESPRIT")
+    f_cand = f_all[mask]
+    z_cand = zeta_all[mask]
 
-    if best_fit is None:
-        logger.error(
-            "(%d, %d): ни одна комбинация не аппроксимировалась (LF only)",
-            ds_lf.temp_K,
-            ds_lf.field_mT,
-        )
-        raise RuntimeError("Ни одна комбинация не аппроксимировалась")
+    if f1_guess is not None and f2_guess is not None:
+        idx1 = int(np.argmin(np.abs(f_cand - f1_guess)))
+        idx2 = int(np.argmin(np.abs(f_cand - f2_guess)))
+        f1_esprit = float(f_cand[idx1])
+        f2_esprit = float(f_cand[idx2])
+        z1 = float(z_cand[idx1]) if z_cand[idx1] > 0 else None
+        z2 = float(z_cand[idx2]) if z_cand[idx2] > 0 else None
+    else:
+        order = np.argsort(z_cand)[::-1]
+        if order.size < 2:
+            raise RuntimeError("LF-тоны не найдены ESPRIT")
+        f1_esprit = float(f_cand[order[0]])
+        f2_esprit = float(f_cand[order[1]])
+        z1 = float(z_cand[order[0]]) if z_cand[order[0]] > 0 else None
+        z2 = float(z_cand[order[1]]) if z_cand[order[1]] > 0 else None
 
-    if best_fit.f1 > best_fit.f2:
-        best_fit = FittingResult(
-            f1=best_fit.f2,
-            f2=best_fit.f1,
-            zeta1=best_fit.zeta2,
-            zeta2=best_fit.zeta1,
-            phi1=best_fit.phi2,
-            phi2=best_fit.phi1,
-            A1=best_fit.A2,
-            A2=best_fit.A1,
-            k_lf=best_fit.k_lf,
-            k_hf=best_fit.k_hf,
-            C_lf=best_fit.C_lf,
-            C_hf=best_fit.C_hf,
-            f1_err=best_fit.f2_err,
-            f2_err=best_fit.f1_err,
-            cost=best_fit.cost,
-        )
+    # FFT peak search around ESPRIT estimates
+    freqs_fft, amps_fft = _fft_spectrum(y, fs)
+    ds_lf.freq_fft, ds_lf.asd_fft = freqs_fft, amps_fft
 
-    if best_fit.cost is not None and best_fit.cost > MAX_COST:
+    def _search_peak(f_esprit: float, avoid: float | None = None) -> float | None:
+        band_lo = (f_esprit / GHZ) * 0.5
+        band_hi = (f_esprit / GHZ) * 1.5
+        f_pk = _peak_in_band(freqs_fft, amps_fft, band_lo, band_hi)
+        if f_pk is None:
+            range_hz = (f_esprit * 0.5, f_esprit * 1.5)
+            logger.info(
+                "LF fallback range: %.1f–%.1f ГГц",
+                range_hz[0] / GHZ,
+                range_hz[1] / GHZ,
+            )
+            f_pk = _fallback_peak(t, y, fs, range_hz, f_esprit, avoid=avoid)
+        return f_pk
+
+    f1_peak = _search_peak(f1_esprit)
+    if f1_peak is None:
+        raise RuntimeError("LF-тон 1 не найден")
+    f2_peak = _search_peak(f2_esprit, avoid=f1_peak)
+    if f2_peak is None:
+        raise RuntimeError("LF-тон 2 не найден")
+
+    ds_lf.f1_init = f1_peak
+    ds_lf.f2_init = f2_peak
+    ds_lf.zeta1 = z1
+    ds_lf.zeta2 = z2
+
+    fit, cost = fit_single(
+        ds_lf,
+        freq_bounds=(
+            freq_bounds
+            if freq_bounds
+            else ((f1_peak * 0.9, f1_peak * 1.1), (f2_peak * 0.9, f2_peak * 1.1))
+        ),
+    )
+
+    if fit.cost is not None and fit.cost > MAX_COST:
         logger.warning(
             "(%d, %d): аппроксимация отклонена f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
             ds_lf.temp_K,
             ds_lf.field_mT,
-            best_fit.f1 / GHZ,
-            best_fit.f2 / GHZ,
-            best_fit.cost,
+            fit.f1 / GHZ,
+            fit.f2 / GHZ,
+            fit.cost,
         )
         ds_lf.fit = None
         return None
 
-    ds_lf.fit = best_fit
+    ds_lf.fit = fit
     logger.info(
         "(%d, %d): аппроксимация успешна f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
         ds_lf.temp_K,
         ds_lf.field_mT,
-        best_fit.f1 / GHZ,
-        best_fit.f2 / GHZ,
-        best_fit.cost,
+        fit.f1 / GHZ,
+        fit.f2 / GHZ,
+        fit.cost,
     )
-    return best_fit
+    return fit
