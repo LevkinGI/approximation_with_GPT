@@ -897,14 +897,15 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             target_ratio = rough_ratio
     fs_hf = 1.0 / float(np.mean(np.diff(t_hf)))
     fs_lf = 1.0 / float(np.mean(np.diff(t_lf)))
-    freqs_fft, amps_fft = _fft_spectrum(y_hf, fs_hf)
-    ds_hf.freq_fft, ds_hf.asd_fft = freqs_fft, amps_fft
-    ds_lf.freq_fft, ds_lf.asd_fft = _fft_spectrum(y_lf, fs_lf)
-    pk = int(np.argmax(amps_fft))
+    freqs_fft_hf, amps_fft_hf = _fft_spectrum(y_hf, fs_hf)
+    freqs_fft_lf, amps_fft_lf = _fft_spectrum(y_lf, fs_lf)
+    ds_hf.freq_fft, ds_hf.asd_fft = freqs_fft_hf, amps_fft_hf
+    ds_lf.freq_fft, ds_lf.asd_fft = freqs_fft_lf, amps_fft_lf
+    pk = int(np.argmax(amps_fft_hf))
     minima = np.where(
-        (np.diff(np.signbit(np.diff(amps_fft))) > 0) & (np.arange(len(amps_fft))[1:-1] > pk)
+        (np.diff(np.signbit(np.diff(amps_fft_hf))) > 0) & (np.arange(len(amps_fft_hf))[1:-1] > pk)
     )[0]
-    start_band_HF = freqs_fft[minima[0]]/GHZ if minima.size else 20.0
+    start_band_HF = freqs_fft_hf[minima[0]]/GHZ if minima.size else 20.0
     if start_band_HF > 30.0:
         start_band_HF = 30.0
 
@@ -913,9 +914,9 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         lf_hi = f1_guess * (1 + GUESS_SEARCH_TOL) / GHZ
         hf_lo = f2_guess * (1 - GUESS_SEARCH_TOL) / GHZ
         hf_hi = f2_guess * (1 + GUESS_SEARCH_TOL) / GHZ
-        f1_hz = _peak_in_band(freqs_fft, amps_fft, lf_lo, lf_hi,
-                              theory_GHz=f1_guess/GHZ, t=t_hf, y=y_hf, fs=fs_hf)
-        f2_hz = _peak_in_band(freqs_fft, amps_fft, hf_lo, hf_hi,
+        f1_hz = _peak_in_band(freqs_fft_lf, amps_fft_lf, lf_lo, lf_hi,
+                              theory_GHz=f1_guess/GHZ, t=t_lf, y=y_lf, fs=fs_lf)
+        f2_hz = _peak_in_band(freqs_fft_hf, amps_fft_hf, hf_lo, hf_hi,
                               theory_GHz=f2_guess/GHZ, t=t_hf, y=y_hf, fs=fs_hf)
         range_lf = f"{lf_lo:.0f}–{lf_hi:.0f}"
         range_hf = f"{hf_lo:.0f}–{hf_hi:.0f}"
@@ -923,20 +924,20 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             logger.warning(
                 "(%d, %d): в узком диапазоне %s ГГц LF пик не найден, расширяем поиск", ds_lf.temp_K, ds_lf.field_mT, range_lf
             )
-            f1_hz = _peak_in_band(freqs_fft, amps_fft, LF_BAND[0]/GHZ, LF_BAND[1]/GHZ,
-                                  t=t_hf, y=y_hf, fs=fs_hf)
+            f1_hz = _peak_in_band(freqs_fft_lf, amps_fft_lf, LF_BAND[0]/GHZ, LF_BAND[1]/GHZ,
+                                  t=t_lf, y=y_lf, fs=fs_lf)
             range_lf = f"{LF_BAND[0]/GHZ:.0f}–{LF_BAND[1]/GHZ:.0f}"
         if f2_hz is None:
             logger.warning(
                 "(%d, %d): в узком диапазоне %s ГГц HF пик не найден, расширяем поиск", ds_lf.temp_K, ds_lf.field_mT, range_hf
             )
-            f2_hz = _peak_in_band(freqs_fft, amps_fft, start_band_HF, HF_BAND[1]/GHZ,
+            f2_hz = _peak_in_band(freqs_fft_hf, amps_fft_hf, start_band_HF, HF_BAND[1]/GHZ,
                                   t=t_hf, y=y_hf, fs=fs_hf)
             range_hf = f"{start_band_HF:.0f}–{HF_BAND[1]/GHZ:.0f}"
     else:
-        f1_hz = _peak_in_band(freqs_fft, amps_fft, LF_BAND[0]/GHZ, LF_BAND[1]/GHZ,
-                              t=t_hf, y=y_hf, fs=fs_hf)
-        f2_hz = _peak_in_band(freqs_fft, amps_fft, start_band_HF, HF_BAND[1]/GHZ,
+        f1_hz = _peak_in_band(freqs_fft_lf, amps_fft_lf, LF_BAND[0]/GHZ, LF_BAND[1]/GHZ,
+                              t=t_lf, y=y_lf, fs=fs_lf)
+        f2_hz = _peak_in_band(freqs_fft_hf, amps_fft_hf, start_band_HF, HF_BAND[1]/GHZ,
                               t=t_hf, y=y_hf, fs=fs_hf)
         range_lf = f"{LF_BAND[0]/GHZ:.0f}–{LF_BAND[1]/GHZ:.0f}"
         range_hf = f"{start_band_HF:.0f}–{HF_BAND[1]/GHZ:.0f}"
@@ -975,8 +976,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                 fmax,
             )
             f2_alt = _peak_in_band(
-                freqs_fft,
-                amps_fft,
+                freqs_fft_hf,
+                amps_fft_hf,
                 fmin,
                 fmax,
                 theory_GHz=(f2_guess / GHZ if guess is not None else None),
