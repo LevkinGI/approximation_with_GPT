@@ -117,7 +117,7 @@ def main(data_dir: str = '.', *, return_datasets: bool = False,
                 use_lf_only = True
         if use_lf_only or ds_hf is None:
             try:
-                fit = process_lf_only(ds_lf)
+                fit = process_lf_only(ds_lf, ds_hf)
             except Exception as e:
                 logger.error("Ошибка обработки %s: %s", key, e)
             else:

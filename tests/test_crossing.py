@@ -49,9 +49,11 @@ def test_ignore_hf_after_crossing(monkeypatch, tmp_path):
         ds_lf.fit = ds_hf.fit = fit_res
         return fit_res
 
-    def fake_process_lf_only(ds_lf):
+    def fake_process_lf_only(ds_lf, ds_hf=None):
         called["lf"] += 1
         ds_lf.fit = fit_res
+        if ds_hf is not None:
+            ds_hf.fit = fit_res
         return fit_res
 
     monkeypatch.setattr(cli, "process_pair", fake_process_pair)

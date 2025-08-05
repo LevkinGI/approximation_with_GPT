@@ -869,7 +869,8 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
 
 def fit_single(ds: DataSet,
                freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
-    t, y = ds.ts.t, ds.ts.s
+    t, y_raw = ds.ts.t, ds.ts.s
+    y = y_raw - np.mean(y_raw)
 
     def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
         if t.size == 0:
@@ -909,11 +910,7 @@ def fit_single(ds: DataSet,
         tau2_init = 1.0 / ds.zeta2
         tau2_lo, tau2_hi = tau2_init * 0.8, tau2_init * 1.2
 
-    k_init = 1.0
-    C_init = np.mean(y)
     p0 = np.array([
-        k_init,
-        C_init,
         A1_init,
         A2_init,
         tau1_init,
@@ -931,8 +928,6 @@ def fit_single(ds: DataSet,
         (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
 
     lo = np.array([
-        0.5,
-        C_init - np.std(y),
         0.0,
         0.0,
         tau1_lo,
@@ -943,8 +938,6 @@ def fit_single(ds: DataSet,
         -PI,
     ])
     hi = np.array([
-        2.0,
-        C_init + np.std(y),
         A1_init * 2,
         A2_init * 2,
         tau1_hi,
@@ -956,9 +949,9 @@ def fit_single(ds: DataSet,
     ])
 
     def residuals(p):
-        (k, C, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_) = p
+        (A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_) = p
         core = _core_signal(t, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        return w * (k * core + C - y)
+        return w * (core - y)
 
     sol = least_squares(
         residuals,
@@ -983,12 +976,12 @@ def fit_single(ds: DataSet,
     except np.linalg.LinAlgError:
         cov = np.full((n, n), np.nan)
 
-    idx_f1 = 6
-    idx_f2 = 7
+    idx_f1 = 4
+    idx_f2 = 5
     sigma_f1 = math.sqrt(abs(cov[idx_f1, idx_f1]))
     sigma_f2 = math.sqrt(abs(cov[idx_f2, idx_f2]))
 
-    (k_fin, C_fin, A1_fin, A2_fin, tau1_fin, tau2_fin,
+    (A1_fin, A2_fin, tau1_fin, tau2_fin,
      f1_fin, f2_fin, phi1_fin, phi2_fin) = p
     logger.debug(
         "Результат LF-only: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
@@ -1009,9 +1002,9 @@ def fit_single(ds: DataSet,
             phi2=phi2_fin,
             A1=A1_fin,
             A2=A2_fin,
-            k_lf=k_fin,
+            k_lf=1.0,
             k_hf=float("nan"),
-            C_lf=C_fin,
+            C_lf=0.0,
             C_hf=float("nan"),
             f1_err=sigma_f1,
             f2_err=sigma_f2,
@@ -1024,7 +1017,7 @@ def fit_single(ds: DataSet,
 
 
 
-def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
+def process_lf_only(ds_lf: DataSet, ds_hf: DataSet | None = None) -> Optional[FittingResult]:
     logger.info(
         "LF-only обработка пары T=%d K, H=%d mT",
         ds_lf.temp_K,
@@ -1111,6 +1104,29 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
         ),
     )
 
+    if ds_hf is not None:
+        t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
+        core_hf = _core_signal(
+            t_hf,
+            fit.A1,
+            fit.A2,
+            1 / fit.zeta1,
+            1 / fit.zeta2,
+            fit.f1,
+            fit.f2,
+            fit.phi1,
+            fit.phi2,
+        )
+        M = np.vstack([core_hf, np.ones_like(core_hf)]).T
+        try:
+            (k_hf, C_hf), *_ = np.linalg.lstsq(M, y_hf, rcond=None)
+            fit.k_hf = float(k_hf)
+            fit.C_hf = float(C_hf)
+        except np.linalg.LinAlgError:
+            logger.warning(
+                "(%d, %d): не удалось подобрать масштаб для HF", ds_lf.temp_K, ds_lf.field_mT
+            )
+
     if fit.cost is not None and fit.cost > MAX_COST:
         logger.warning(
             "(%d, %d): аппроксимация отклонена f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
@@ -1124,6 +1140,8 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
         return None
 
     ds_lf.fit = fit
+    if ds_hf is not None:
+        ds_hf.fit = fit
     logger.info(
         "(%d, %d): аппроксимация успешна f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
         ds_lf.temp_K,
