@@ -451,18 +451,20 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         tau2_init = 1.0 / ds_hf.zeta2
         tau2_lo, tau2_hi = tau2_init * 0.8, tau2_init * 1.2
 
-    k_lf_init = 1
-    k_hf_init = 1
-    C_lf_init = np.mean(y_lf)
+    k_hf_init = 1.0
     C_hf_init = np.mean(y_hf)
 
     p0 = np.array([
-        k_lf_init, k_hf_init,
-        C_lf_init, C_hf_init,
-        A1_init,    A2_init,
-        tau1_init,  tau2_init,
-        f1_init,    f2_init,
-        phi1_init,  phi2_init
+        k_hf_init,
+        C_hf_init,
+        A1_init,
+        A2_init,
+        tau1_init,
+        tau2_init,
+        f1_init,
+        f2_init,
+        phi1_init,
+        phi2_init,
     ])
 
     if freq_bounds is None:
@@ -472,30 +474,47 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
 
     lo = np.array([
-        0.5, 0.5,
-        C_lf_init - np.std(y_lf), C_hf_init - np.std(y_hf),
-        0.0, 0.0,
-        tau1_lo, tau2_lo,
-        f1_lo, f2_lo,
-        -PI, -PI
+        0.5,
+        C_hf_init - np.std(y_hf),
+        0.0,
+        0.0,
+        tau1_lo,
+        tau2_lo,
+        f1_lo,
+        f2_lo,
+        -PI,
+        -PI,
     ])
     hi = np.array([
-        2, 2,
-        C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf),
-        A1_init * 2, A2_init * 2,
-        tau1_hi, tau2_hi,
-        f1_hi, f2_hi,
-        PI, PI
+        2.0,
+        C_hf_init + np.std(y_hf),
+        A1_init * 2,
+        A2_init * 2,
+        tau1_hi,
+        tau2_hi,
+        f1_hi,
+        f2_hi,
+        PI,
+        PI,
     ])
 
     def residuals(p):
-        (k_lf, k_hf, C_lf, C_hf,
-         A1, A2, tau1, tau2,
-         f1_, f2_, phi1_, phi2_) = p
+        (
+            k_hf,
+            C_hf,
+            A1,
+            A2,
+            tau1,
+            tau2,
+            f1_,
+            f2_,
+            phi1_,
+            phi2_,
+        ) = p
 
         core_lf = _core_signal(t_lf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
         core_hf = _core_signal(t_hf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        res_lf = w_lf * (k_lf * core_lf + C_lf - y_lf)
+        res_lf = w_lf * (core_lf - y_lf)
         res_hf = k_hf * core_hf + C_hf - y_hf
         return np.concatenate([res_lf, res_hf])
 
@@ -519,14 +538,23 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     except np.linalg.LinAlgError:
         cov = np.full((n, n), np.nan)
 
-    idx_f1 = 8
-    idx_f2 = 9
+    idx_f1 = 6
+    idx_f2 = 7
     sigma_f1 = math.sqrt(abs(cov[idx_f1, idx_f1]))
     sigma_f2 = math.sqrt(abs(cov[idx_f2, idx_f2]))
 
-    (k_lf, k_hf, C_lf, C_hf,
-     A1, A2, tau1, tau2,
-     f1_fin, f2_fin, phi1_fin, phi2_fin) = p
+    (
+        k_hf,
+        C_hf,
+        A1,
+        A2,
+        tau1,
+        tau2,
+        f1_fin,
+        f2_fin,
+        phi1_fin,
+        phi2_fin,
+    ) = p
     logger.debug(
         "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
         f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
@@ -540,9 +568,9 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         phi2=phi2_fin,
         A1=A1,
         A2=A2,
-        k_lf=k_lf,
+        k_lf=1.0,
         k_hf=k_hf,
-        C_lf=C_lf,
+        C_lf=0.0,
         C_hf=C_hf,
         f1_err=sigma_f1,
         f2_err=sigma_f2,
