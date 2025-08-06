@@ -300,7 +300,7 @@ def visualize_stacked(
                 row=1,
                 col=4,
             )
-        fig.update_xaxes(title_text="T (K)", row=1, col=4)
+        fig.update_xaxes(title_text="Temperature (K)", row=1, col=4)
         for H_fix, pts in amp_vs_T.items():
             T_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
@@ -327,7 +327,7 @@ def visualize_stacked(
                 row=2,
                 col=4,
             )
-        fig.update_xaxes(title_text="T (K)", row=2, col=4)
+        fig.update_xaxes(title_text="Temperature (K)", row=2, col=4)
     else:
         for T_fix, pts in freq_vs_H.items():
             H_vals, fLF, fHF = zip(*pts)
@@ -355,7 +355,7 @@ def visualize_stacked(
                 row=1,
                 col=4,
             )
-        fig.update_xaxes(title_text="H (mT)", row=1, col=4)
+        fig.update_xaxes(title_text="Magnetic field (mT)", row=1, col=4)
         for T_fix, pts in amp_vs_H.items():
             H_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
@@ -382,9 +382,9 @@ def visualize_stacked(
                 row=2,
                 col=4,
             )
-        fig.update_xaxes(title_text="H (mT)", row=2, col=4)
-    fig.update_yaxes(title_text="f (GHz)", row=1, col=4)
-    fig.update_yaxes(title_text="amp", row=2, col=4)
+        fig.update_xaxes(title_text="Magnetic field (mT)", row=2, col=4)
+    fig.update_yaxes(title_text="Frequency (GHz)", row=1, col=4)
+    fig.update_yaxes(title_text="Amplitude", row=2, col=4)
 
     if theory_curves is not None:
         axis, hf_th, lf_th = theory_curves
@@ -534,7 +534,7 @@ def visualize_stacked(
         gridwidth=1,
         row=1,
         col=1,
-        title_text="time (ns)",
+        title_text="Time (ns)",
     )
     fig.update_xaxes(
         showline=True,
@@ -548,7 +548,7 @@ def visualize_stacked(
         gridwidth=1,
         row=1,
         col=2,
-        title_text="time (ns)",
+        title_text="Time (ns)",
     )
     fig.update_xaxes(
         showline=True,
@@ -562,7 +562,7 @@ def visualize_stacked(
         gridwidth=1,
         row=1,
         col=3,
-        title_text="frequency (GHz)",
+        title_text="Frequency (GHz)",
     )
     fig.update_yaxes(
         range=[0, shift + y_step],
@@ -916,7 +916,7 @@ def visualize_without_spectra(
                 row=1,
                 col=3,
             )
-        fig.update_xaxes(title_text="T (K)", row=1, col=3)
+        fig.update_xaxes(title_text="Temperature (K)", row=1, col=3)
     else:
         for T_fix, pts in freq_vs_H.items():
             H_vals, fLF, fHF = zip(*pts)
@@ -948,8 +948,8 @@ def visualize_without_spectra(
                 row=1,
                 col=3,
             )
-        fig.update_xaxes(title_text="H (mT)", row=1, col=3)
-    fig.update_yaxes(title_text="f (GHz)", row=1, col=3)
+        fig.update_xaxes(title_text="Magnetic field (mT)", row=1, col=3)
+    fig.update_yaxes(title_text="Frequency (GHz)", row=1, col=3)
 
     if theory_curves is not None:
         axis, hf_th, lf_th = theory_curves
@@ -1008,7 +1008,7 @@ def visualize_without_spectra(
         gridwidth=1,
         row=1,
         col=1,
-        title_text="time (ns)",
+        title_text="Time (ns)",
     )
     fig.update_xaxes(
         showline=True,
@@ -1022,7 +1022,7 @@ def visualize_without_spectra(
         gridwidth=1,
         row=1,
         col=2,
-        title_text="time (ns)",
+        title_text="Time (ns)",
     )
     fig.update_yaxes(
         range=[0, shift + y_step],
