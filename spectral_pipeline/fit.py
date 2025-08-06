@@ -321,6 +321,55 @@ def _hankel_matrix(x: NDArray, L: int) -> NDArray:
     return np.lib.stride_tricks.sliding_window_view(x, L).T
 
 
+def multichannel_esprit(r_list: List[NDArray], fs: float, p: int = 6
+                        ) -> Tuple[NDArray, NDArray]:
+    """Estimate modal frequencies and decays using multichannel ESPRIT.
+
+    Parameters
+    ----------
+    r_list : list of ndarray
+        List of equally sampled signals. All signals are assumed to share the
+        same sampling rate ``fs``.
+    fs : float
+        Sampling frequency in Hz.
+    p : int, optional
+        Number of components (model order) to retain, by default 6.
+
+    Returns
+    -------
+    Tuple[NDArray, NDArray]
+        Frequencies and decay rates of the estimated modes.
+    """
+    if not r_list:
+        raise ValueError("r_list must contain at least one signal")
+
+    # Use the shortest signal length to build Hankel matrices with equal shapes
+    N = min(len(r) for r in r_list)
+    L = N // 2
+    if L <= 0:
+        raise ValueError("signals are too short for ESPRIT")
+
+    hankels = [_hankel_matrix(np.asarray(r)[:N], L) for r in r_list]
+    H = np.vstack(hankels)
+
+    try:
+        U, _, _ = np.linalg.svd(H, full_matrices=False)
+        Us = U[:, :p]
+        Us1, Us2 = Us[:-1], Us[1:]
+        Psi = np.linalg.pinv(Us1) @ Us2
+        lam = np.linalg.eigvals(Psi)
+        dt = 1.0 / fs
+        f = np.abs(np.angle(lam)) / (2 * np.pi * dt)
+        zeta = -np.log(np.abs(lam)) / dt
+    except np.linalg.LinAlgError:
+        f, zeta = _esprit_freqs_and_decay(r_list[0][:N], fs, p)
+    if (not np.all(np.isfinite(f)) or not np.any(f)):
+        f, zeta = _esprit_freqs_and_decay(r_list[0][:N], fs, p)
+    logger.debug("ESPRIT raw freqs: %s", np.round(f / GHZ, 3))
+    logger.debug("ESPRIT raw zeta: %s", np.round(zeta, 3))
+    return f, zeta
+
+
 def _esprit_freqs_and_decay(r: NDArray, fs: float, p: int = 6
                             ) -> Tuple[NDArray, NDArray]:
     L = len(r) // 2
@@ -507,6 +556,25 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
+    def _prepare_signals() -> tuple[NDArray, NDArray, float]:
+        """Return LF/HF signals aligned to a common sampling rate."""
+        spec_lf = y_lf - np.mean(y_lf)
+        spec_hf = y_hf - np.mean(y_hf)
+        fs_lf = ds_lf.ts.meta.fs
+        fs_hf = ds_hf.ts.meta.fs
+        if abs(fs_lf - fs_hf) > 1e-9:
+            fs_common = min(fs_lf, fs_hf)
+            t_end = min(t_lf[-1], t_hf[-1])
+            t_common = np.arange(0.0, t_end, 1.0 / fs_common)
+            spec_lf_c = np.interp(t_common, t_lf, spec_lf)
+            spec_hf_c = np.interp(t_common, t_hf, spec_hf)
+        else:
+            fs_common = fs_lf
+            n = min(spec_lf.size, spec_hf.size)
+            spec_lf_c = spec_lf[:n]
+            spec_hf_c = spec_hf[:n]
+        return spec_lf_c, spec_hf_c, fs_common
+
     def _search_candidates() -> tuple[list[tuple[float, Optional[float]]],
                                       list[tuple[float, Optional[float]]],
                                       tuple[tuple[float, float], tuple[float, float]] | None]:
@@ -516,21 +584,21 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         f2_rough, _, _, _ = _single_sine_refine(t_hf, residual, f0=40 * GHZ)
         logger.debug("Rough estimates: f1=%.3f ГГц, f2=%.3f ГГц",
                      f1_rough/GHZ, f2_rough/GHZ)
-        spec_hf = y_hf - np.mean(y_hf)
-        f_all_hf, zeta_all_hf = _esprit_freqs_and_decay(spec_hf, ds_hf.ts.meta.fs)
+        spec_lf_c, spec_hf_c, fs_common = _prepare_signals()
+        f_all, zeta_all = multichannel_esprit([spec_lf_c, spec_hf_c], fs_common)
         mask_hf = (
-            (zeta_all_hf > -5e8)
-            & (HF_BAND[0] <= f_all_hf)
-            & (f_all_hf <= HF_BAND[1])
-            & (np.abs(f_all_hf - f2_rough) <= 7 * GHZ)
+            (zeta_all > -5e8)
+            & (HF_BAND[0] <= f_all)
+            & (f_all <= HF_BAND[1])
+            & (np.abs(f_all - f2_rough) <= 7 * GHZ)
         )
-        logger.debug("ESPRIT HF filtered: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
+        logger.debug("ESPRIT HF filtered: %s", np.round(f_all[mask_hf] / GHZ, 3))
         if not np.any(mask_hf):
-            mask_hf = (HF_BAND[0] <= f_all_hf) & (f_all_hf <= HF_BAND[1])
-            logger.debug("ESPRIT HF relaxed: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
+            mask_hf = (HF_BAND[0] <= f_all) & (f_all <= HF_BAND[1])
+            logger.debug("ESPRIT HF relaxed: %s", np.round(f_all[mask_hf] / GHZ, 3))
         if np.any(mask_hf):
             hf_c = [(f, z if z > 0 else None)
-                    for f, z in zip(f_all_hf[mask_hf], zeta_all_hf[mask_hf])]
+                    for f, z in zip(f_all[mask_hf], zeta_all[mask_hf])]
         else:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
             range_hf = (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ) if f2_rough is not None else HF_BAND
@@ -539,17 +607,15 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
             hf_c = [(f2_fallback, None)]
-        spec_lf = y_lf - np.mean(y_lf)
-        f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
         mask_lf = (
-            (zeta_all_lf > 0)
-            & (LF_BAND[0] <= f_all_lf)
-            & (f_all_lf <= LF_BAND[1])
-            & (np.abs(f_all_lf - f1_rough) <= 5 * GHZ)
+            (zeta_all > 0)
+            & (LF_BAND[0] <= f_all)
+            & (f_all <= LF_BAND[1])
+            & (np.abs(f_all - f1_rough) <= 5 * GHZ)
         )
-        logger.debug("ESPRIT LF filtered: %s", np.round(f_all_lf[mask_lf] / GHZ, 3))
+        logger.debug("ESPRIT LF filtered: %s", np.round(f_all[mask_lf] / GHZ, 3))
         if np.any(mask_lf):
-            lf_c = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_rough)
+            lf_c = _top2_nearest(f_all[mask_lf], zeta_all[mask_lf], f1_rough)
         else:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
             range_lf = (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ) if f1_rough is not None else LF_BAND
@@ -571,19 +637,19 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         logger.info(
             "(%d, %d): использованы предварительные оценки f1=%.3f ГГц, f2=%.3f ГГц",
             ds_lf.temp_K, ds_lf.field_mT, f1_guess/GHZ, f2_guess/GHZ)
-        spec_hf = y_hf - np.mean(y_hf)
-        f_all_hf, zeta_all_hf = _esprit_freqs_and_decay(spec_hf, ds_hf.ts.meta.fs)
+        spec_lf_c, spec_hf_c, fs_common = _prepare_signals()
+        f_all, zeta_all = multichannel_esprit([spec_lf_c, spec_hf_c], fs_common)
         mask_hf = (
-            (zeta_all_hf > -5e8)
-            & (HF_BAND[0] <= f_all_hf)
-            & (f_all_hf <= HF_BAND[1])
-            & (np.abs(f_all_hf - f2_guess) <= 7 * GHZ)
+            (zeta_all > -5e8)
+            & (HF_BAND[0] <= f_all)
+            & (f_all <= HF_BAND[1])
+            & (np.abs(f_all - f2_guess) <= 7 * GHZ)
         )
-        logger.debug("ESPRIT HF filtered: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
+        logger.debug("ESPRIT HF filtered: %s", np.round(f_all[mask_hf] / GHZ, 3))
         if not np.any(mask_hf):
-            mask_hf = (HF_BAND[0] <= f_all_hf) & (f_all_hf <= HF_BAND[1])
-            logger.debug("ESPRIT HF relaxed: %s", np.round(f_all_hf[mask_hf] / GHZ, 3))
-        hf_cand = _top2_nearest(f_all_hf[mask_hf], np.maximum(zeta_all_hf[mask_hf], 0.0), f2_guess) if np.any(mask_hf) else []
+            mask_hf = (HF_BAND[0] <= f_all) & (f_all <= HF_BAND[1])
+            logger.debug("ESPRIT HF relaxed: %s", np.round(f_all[mask_hf] / GHZ, 3))
+        hf_cand = _top2_nearest(f_all[mask_hf], np.maximum(zeta_all[mask_hf], 0.0), f2_guess) if np.any(mask_hf) else []
         if not hf_cand:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
             range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
@@ -592,16 +658,14 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
             hf_cand = [(f2_fallback, None)]
-        spec_lf = y_lf - np.mean(y_lf)
-        f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
         mask_lf = (
-            (zeta_all_lf > 0)
-            & (LF_BAND[0] <= f_all_lf)
-            & (f_all_lf <= LF_BAND[1])
-            & (np.abs(f_all_lf - f1_guess) <= 5 * GHZ)
+            (zeta_all > 0)
+            & (LF_BAND[0] <= f_all)
+            & (f_all <= LF_BAND[1])
+            & (np.abs(f_all - f1_guess) <= 5 * GHZ)
         )
-        logger.debug("ESPRIT LF filtered: %s", np.round(f_all_lf[mask_lf] / GHZ, 3))
-        lf_cand = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_guess) if np.any(mask_lf) else []
+        logger.debug("ESPRIT LF filtered: %s", np.round(f_all[mask_lf] / GHZ, 3))
+        lf_cand = _top2_nearest(f_all[mask_lf], zeta_all[mask_lf], f1_guess) if np.any(mask_lf) else []
         if not lf_cand:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
             range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
