@@ -512,7 +512,7 @@ def visualize_stacked(
     fig.update_layout(
         showlegend=False,
         hovermode="x unified",
-        font=dict(size=20),
+        font=dict(size=16),
         width=2000,
         height=1000,
         paper_bgcolor="white",
@@ -640,8 +640,8 @@ def visualize_stacked(
         range=[0, None],
     )
 
-    fig.update_xaxes(title_font=dict(size=20), tickfont=dict(size=20))
-    fig.update_yaxes(title_font=dict(size=20), tickfont=dict(size=20))
+    fig.update_xaxes(title_font=dict(size=20), tickfont=dict(size=22))
+    fig.update_yaxes(title_font=dict(size=20), tickfont=dict(size=22))
 
     if outfile:
         fig.write_html(outfile)
@@ -989,7 +989,7 @@ def visualize_without_spectra(
     fig.update_layout(
         showlegend=False,
         hovermode="x unified",
-        font=dict(size=20),
+        font=dict(size=16),
         width=2000,
         height=1000,
         paper_bgcolor="white",
@@ -1070,8 +1070,8 @@ def visualize_without_spectra(
         col=3,
     )
 
-    fig.update_xaxes(title_font=dict(size=20), tickfont=dict(size=20))
-    fig.update_yaxes(title_font=dict(size=20), tickfont=dict(size=20))
+    fig.update_xaxes(title_font=dict(size=20), tickfont=dict(size=22))
+    fig.update_yaxes(title_font=dict(size=20), tickfont=dict(size=22))
 
     if outfile:
         fig.write_html(outfile)
