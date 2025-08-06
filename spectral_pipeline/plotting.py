@@ -640,8 +640,8 @@ def visualize_stacked(
         range=[0, None],
     )
 
-    fig.update_xaxes(title_font=dict(size=20), tickfont=dict(size=22))
-    fig.update_yaxes(title_font=dict(size=20), tickfont=dict(size=22))
+    fig.update_xaxes(title_font=dict(size=28), tickfont=dict(size=24))
+    fig.update_yaxes(title_font=dict(size=28), tickfont=dict(size=24))
 
     if outfile:
         fig.write_html(outfile)
@@ -1070,8 +1070,8 @@ def visualize_without_spectra(
         col=3,
     )
 
-    fig.update_xaxes(title_font=dict(size=20), tickfont=dict(size=22))
-    fig.update_yaxes(title_font=dict(size=20), tickfont=dict(size=22))
+    fig.update_xaxes(title_font=dict(size=28), tickfont=dict(size=24))
+    fig.update_yaxes(title_font=dict(size=28), tickfont=dict(size=24))
 
     if outfile:
         fig.write_html(outfile)
