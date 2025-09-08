@@ -11,9 +11,16 @@ from .fit import _core_signal
 
 
 
-def _load_guess_curves(directory: Path, field_mT: int, temp_K: int
-                        ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    """Return theoretical frequency curves if guess file exists."""
+def _load_guess_curves(
+    directory: Path, field_mT: int, temp_K: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None] | None:
+    """Return theoretical frequency and damping curves if guess file exists.
+
+    The guess file now contains five rows: axis values, HF frequencies,
+    LF frequencies, HF damping times ``τ`` and LF ``τ`` in nanoseconds.  For
+    backwards compatibility the last two arrays may be absent; in this case
+    ``None`` is returned for the corresponding values.
+    """
     path_H = directory / f"H_{field_mT}.npy"
     path_T = directory / f"T_{temp_K}.npy"
     if path_H.exists():
@@ -32,7 +39,9 @@ def _load_guess_curves(directory: Path, field_mT: int, temp_K: int
     axis = arr[0]
     hf = arr[1]
     lf = arr[2]
-    return axis, hf, lf
+    tau_hf = arr[3] if arr.shape[0] > 3 else None
+    tau_lf = arr[4] if arr.shape[0] > 4 else None
+    return axis, hf, lf, tau_lf, tau_hf
 
 
 def visualize_stacked(
@@ -88,6 +97,8 @@ def visualize_stacked(
 
     freq_vs_H: dict[int, list[tuple[int, float, float]]] = {}
     freq_vs_T: dict[int, list[tuple[int, float, float]]] = {}
+    tau_vs_H: dict[int, list[tuple[int, float, float]]] = {}
+    tau_vs_T: dict[int, list[tuple[int, float, float]]] = {}
     amp_vs_H: dict[int, list[tuple[int, float, float]]] = {}
     amp_vs_T: dict[int, list[tuple[int, float, float]]] = {}
     for ds_lf, ds_hf in triples_sorted:
@@ -95,13 +106,19 @@ def visualize_stacked(
             continue
         H, T = ds_lf.field_mT, ds_lf.temp_K
         f1, f2 = sorted((ds_lf.fit.f1 / GHZ, ds_lf.fit.f2 / GHZ))
+        tau1_ns = (1 / ds_lf.fit.zeta1) / NS
+        tau2_ns = (1 / ds_lf.fit.zeta2) / NS
         freq_vs_H.setdefault(T, []).append((H, f1, f2))
         freq_vs_T.setdefault(H, []).append((T, f1, f2))
+        tau_vs_H.setdefault(T, []).append((H, tau1_ns, tau2_ns))
+        tau_vs_T.setdefault(H, []).append((T, tau1_ns, tau2_ns))
         amp_vs_H.setdefault(T, []).append((H, ds_lf.fit.A1, ds_lf.fit.A2))
         amp_vs_T.setdefault(H, []).append((T, ds_lf.fit.A1, ds_lf.fit.A2))
 
     freq_vs_H = {T: sorted(v) for T, v in freq_vs_H.items() if len(v) >= 2}
     freq_vs_T = {H: sorted(v) for H, v in freq_vs_T.items() if len(v) >= 2}
+    tau_vs_H = {T: sorted(v) for T, v in tau_vs_H.items() if len(v) >= 2}
+    tau_vs_T = {H: sorted(v) for H, v in tau_vs_T.items() if len(v) >= 2}
     amp_vs_H = {T: sorted(v) for T, v in amp_vs_H.items() if len(v) >= 2}
     amp_vs_T = {H: sorted(v) for H, v in amp_vs_T.items() if len(v) >= 2}
 
@@ -117,11 +134,12 @@ def visualize_stacked(
 
     specs = [
         [
-            {"type": "xy", "rowspan": 2},
-            {"type": "xy", "rowspan": 2},
-            {"type": "xy", "rowspan": 2},
+            {"type": "xy", "rowspan": 3},
+            {"type": "xy", "rowspan": 3},
+            {"type": "xy", "rowspan": 3},
             {"type": "xy"},
         ],
+        [None, None, None, {"type": "xy"}],
         [None, None, None, {"type": "xy"}],
     ]
 
@@ -132,6 +150,7 @@ def visualize_stacked(
             f"HF signals (H = {fixed_H} mT)",
             f"Spectra (H = {fixed_H} mT)",
             f"Frequencies (H = {fixed_H} mT)",
+            f"Damping times (H = {fixed_H} mT)",
             f"Amplitudes (H = {fixed_H} mT)",
         ]
     else:  # varying == "H"
@@ -141,16 +160,17 @@ def visualize_stacked(
             f"HF signals (T = {fixed_T} K)",
             f"Spectra (T = {fixed_T} K)",
             f"Frequencies (T = {fixed_T} K)",
+            f"Damping times (T = {fixed_T} K)",
             f"Amplitudes (T = {fixed_T} K)",
         ]
 
     fig = make_subplots(
-        rows=2,
+        rows=3,
         cols=4,
         specs=specs,
         column_widths=[0.26, 0.26, 0.26, 0.22],
         horizontal_spacing=0.06,
-        vertical_spacing=0.15,
+        vertical_spacing=0.1,
         subplot_titles=tuple(titles),
     )
 
@@ -301,6 +321,33 @@ def visualize_stacked(
                 col=4,
             )
         fig.update_xaxes(title_text="Temperature (K)", row=1, col=4)
+        for H_fix, pts in tau_vs_T.items():
+            T_vals, tau_LF, tau_HF = zip(*pts)
+            fig.add_trace(
+                go.Scatter(
+                    x=T_vals,
+                    y=tau_LF,
+                    mode="markers",
+                    line=dict(width=2, color="red"),
+                    marker=dict(size=9, color="red"),
+                    name=f"tau_LF, H = {H_fix} mT",
+                ),
+                row=2,
+                col=4,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=T_vals,
+                    y=tau_HF,
+                    mode="markers",
+                    line=dict(width=2, color="blue"),
+                    marker=dict(size=9, color="blue"),
+                    name=f"tau_HF, H = {H_fix} mT",
+                ),
+                row=2,
+                col=4,
+            )
+        fig.update_xaxes(title_text="Temperature (K)", row=2, col=4)
         for H_fix, pts in amp_vs_T.items():
             T_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
@@ -312,7 +359,7 @@ def visualize_stacked(
                     marker=dict(size=9, color="red"),
                     name=f"A_LF, H = {H_fix} mT",
                 ),
-                row=2,
+                row=3,
                 col=4,
             )
             fig.add_trace(
@@ -324,10 +371,10 @@ def visualize_stacked(
                     marker=dict(size=9, color="blue"),
                     name=f"A_HF, H = {H_fix} mT",
                 ),
-                row=2,
+                row=3,
                 col=4,
             )
-        fig.update_xaxes(title_text="Temperature (K)", row=2, col=4)
+        fig.update_xaxes(title_text="Temperature (K)", row=3, col=4)
     else:
         for T_fix, pts in freq_vs_H.items():
             H_vals, fLF, fHF = zip(*pts)
@@ -356,6 +403,33 @@ def visualize_stacked(
                 col=4,
             )
         fig.update_xaxes(title_text="Magnetic field (mT)", row=1, col=4)
+        for T_fix, pts in tau_vs_H.items():
+            H_vals, tau_LF, tau_HF = zip(*pts)
+            fig.add_trace(
+                go.Scatter(
+                    x=H_vals,
+                    y=tau_LF,
+                    mode="markers",
+                    line=dict(width=2, color="red"),
+                    marker=dict(size=9, color="red"),
+                    name=f"tau_LF, T = {T_fix} K",
+                ),
+                row=2,
+                col=4,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=H_vals,
+                    y=tau_HF,
+                    mode="markers",
+                    line=dict(width=2, color="blue"),
+                    marker=dict(size=9, color="blue"),
+                    name=f"tau_HF, T = {T_fix} K",
+                ),
+                row=2,
+                col=4,
+            )
+        fig.update_xaxes(title_text="Magnetic field (mT)", row=2, col=4)
         for T_fix, pts in amp_vs_H.items():
             H_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
@@ -367,7 +441,7 @@ def visualize_stacked(
                     marker=dict(size=9, color="red"),
                     name=f"A_LF, T = {T_fix} K",
                 ),
-                row=2,
+                row=3,
                 col=4,
             )
             fig.add_trace(
@@ -379,21 +453,24 @@ def visualize_stacked(
                     marker=dict(size=9, color="blue"),
                     name=f"A_HF, T = {T_fix} K",
                 ),
-                row=2,
+                row=3,
                 col=4,
             )
-        fig.update_xaxes(title_text="Magnetic field (mT)", row=2, col=4)
+        fig.update_xaxes(title_text="Magnetic field (mT)", row=3, col=4)
     fig.update_yaxes(title_text="Frequency (GHz)", row=1, col=4)
-    fig.update_yaxes(title_text="Amplitude", row=2, col=4)
+    fig.update_yaxes(title_text="Tau (ns)", row=2, col=4)
+    fig.update_yaxes(title_text="Amplitude", row=3, col=4)
 
     if theory_curves is not None:
-        axis, hf_th, lf_th = theory_curves
+        axis, hf_th, lf_th, tau_lf_th, tau_hf_th = theory_curves
         var_vals = [key_func(ds_lf) for ds_lf, _ in triples_sorted]
         lo, hi = min(var_vals), max(var_vals)
         mask = (axis >= lo) & (axis <= hi)
         axis = axis[mask]
         hf_th = hf_th[mask]
         lf_th = lf_th[mask]
+        tau_lf_th = tau_lf_th[mask] if tau_lf_th is not None else None
+        tau_hf_th = tau_hf_th[mask] if tau_hf_th is not None else None
         col_idx = 4
         fig.add_trace(
             go.Scatter(
@@ -417,6 +494,29 @@ def visualize_stacked(
             row=1,
             col=col_idx,
         )
+        if tau_lf_th is not None and tau_hf_th is not None:
+            fig.add_trace(
+                go.Scatter(
+                    x=axis,
+                    y=tau_lf_th,
+                    mode="lines",
+                    line=dict(color="red", dash="dot"),
+                    name="tau_LF theory",
+                ),
+                row=2,
+                col=col_idx,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=axis,
+                    y=tau_hf_th,
+                    mode="lines",
+                    line=dict(color="blue", dash="dot"),
+                    name="tau_HF theory",
+                ),
+                row=2,
+                col=col_idx,
+            )
 
     spectra_HF: list[tuple[np.ndarray, np.ndarray, str]] = []
     spectra_LF: list[tuple[np.ndarray, np.ndarray, str]] = []
@@ -514,7 +614,7 @@ def visualize_stacked(
         hovermode="x unified",
         font=dict(size=16),
         width=2000,
-        height=1000,
+        height=1300,
         paper_bgcolor="white",
         plot_bgcolor="white",
     )
@@ -714,21 +814,35 @@ def visualize_without_spectra(
     freq_vs_T: dict[int, list[tuple[int, float, float]]] = {}
     err_vs_H: dict[int, list[tuple[int, float, float]]] = {}
     err_vs_T: dict[int, list[tuple[int, float, float]]] = {}
+    tau_vs_H: dict[int, list[tuple[int, float, float]]] = {}
+    tau_vs_T: dict[int, list[tuple[int, float, float]]] = {}
+    amp_vs_H: dict[int, list[tuple[int, float, float]]] = {}
+    amp_vs_T: dict[int, list[tuple[int, float, float]]] = {}
     for ds_lf, ds_hf in triples_sorted:
         if ds_lf.fit is None:
             continue
         H, T = ds_lf.field_mT, ds_lf.temp_K
         f1, f2 = sorted((ds_lf.fit.f1 / GHZ, ds_lf.fit.f2 / GHZ))
         s1, s2 = ds_lf.fit.f1_err / GHZ, ds_lf.fit.f2_err / GHZ
+        tau1_ns = (1 / ds_lf.fit.zeta1) / NS
+        tau2_ns = (1 / ds_lf.fit.zeta2) / NS
         freq_vs_H.setdefault(T, []).append((H, f1, f2))
         freq_vs_T.setdefault(H, []).append((T, f1, f2))
         err_vs_H.setdefault(T, []).append((H, s1, s2))
         err_vs_T.setdefault(H, []).append((T, s1, s2))
+        tau_vs_H.setdefault(T, []).append((H, tau1_ns, tau2_ns))
+        tau_vs_T.setdefault(H, []).append((T, tau1_ns, tau2_ns))
+        amp_vs_H.setdefault(T, []).append((H, ds_lf.fit.A1, ds_lf.fit.A2))
+        amp_vs_T.setdefault(H, []).append((T, ds_lf.fit.A1, ds_lf.fit.A2))
 
     freq_vs_H = {T: sorted(v) for T, v in freq_vs_H.items() if len(v) >= 2}
     freq_vs_T = {H: sorted(v) for H, v in freq_vs_T.items() if len(v) >= 2}
     err_vs_H = {T: sorted(v) for T, v in err_vs_H.items() if len(v) >= 2}
     err_vs_T = {H: sorted(v) for H, v in err_vs_T.items() if len(v) >= 2}
+    tau_vs_H = {T: sorted(v) for T, v in tau_vs_H.items() if len(v) >= 2}
+    tau_vs_T = {H: sorted(v) for H, v in tau_vs_T.items() if len(v) >= 2}
+    amp_vs_H = {T: sorted(v) for T, v in amp_vs_H.items() if len(v) >= 2}
+    amp_vs_T = {H: sorted(v) for H, v in amp_vs_T.items() if len(v) >= 2}
 
     theory_curves = None
     first_ds = triples_sorted[0][0]
@@ -739,7 +853,11 @@ def visualize_without_spectra(
             first_ds.temp_K,
         )
 
-    specs = [[{"type": "xy", "rowspan": 2}, {"type": "xy", "rowspan": 2}, {"type": "xy"}], [None, None, None]]
+    specs = [
+        [{"type": "xy", "rowspan": 3}, {"type": "xy", "rowspan": 3}, {"type": "xy"}],
+        [None, None, {"type": "xy"}],
+        [None, None, {"type": "xy"}],
+    ]
 
     if varying == "T":
         fixed_H = list(all_H)[0]
@@ -747,6 +865,8 @@ def visualize_without_spectra(
             f"LF signals (H = {fixed_H} mT)",
             f"HF signals (H = {fixed_H} mT)",
             f"Frequencies (H = {fixed_H} mT)",
+            f"Damping times (H = {fixed_H} mT)",
+            f"Amplitudes (H = {fixed_H} mT)",
         ]
     else:  # varying == "H"
         fixed_T = list(all_T)[0]
@@ -754,15 +874,17 @@ def visualize_without_spectra(
             f"LF signals (T = {fixed_T} K)",
             f"HF signals (T = {fixed_T} K)",
             f"Frequencies (T = {fixed_T} K)",
+            f"Damping times (T = {fixed_T} K)",
+            f"Amplitudes (T = {fixed_T} K)",
         ]
 
     fig = make_subplots(
-        rows=2,
+        rows=3,
         cols=3,
         specs=specs,
         column_widths=[0.34, 0.34, 0.32],
         horizontal_spacing=0.06,
-        vertical_spacing=0.15,
+        vertical_spacing=0.1,
         subplot_titles=tuple(titles),
     )
 
@@ -920,6 +1042,60 @@ def visualize_without_spectra(
                 col=3,
             )
         fig.update_xaxes(title_text="Temperature (K)", row=1, col=3)
+        for H_fix, pts in tau_vs_T.items():
+            T_vals, tau_LF, tau_HF = zip(*pts)
+            fig.add_trace(
+                go.Scatter(
+                    x=T_vals,
+                    y=tau_LF,
+                    mode="markers",
+                    line=dict(width=2, color="red"),
+                    marker=dict(size=9, color="red"),
+                    name=f"tau_LF, H = {H_fix} mT",
+                ),
+                row=2,
+                col=3,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=T_vals,
+                    y=tau_HF,
+                    mode="markers",
+                    line=dict(width=2, color="blue"),
+                    marker=dict(size=9, color="blue"),
+                    name=f"tau_HF, H = {H_fix} mT",
+                ),
+                row=2,
+                col=3,
+            )
+        fig.update_xaxes(title_text="Temperature (K)", row=2, col=3)
+        for H_fix, pts in amp_vs_T.items():
+            T_vals, amp_LF, amp_HF = zip(*pts)
+            fig.add_trace(
+                go.Scatter(
+                    x=T_vals,
+                    y=amp_LF,
+                    mode="markers",
+                    line=dict(width=2, color="red"),
+                    marker=dict(size=9, color="red"),
+                    name=f"A_LF, H = {H_fix} mT",
+                ),
+                row=3,
+                col=3,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=T_vals,
+                    y=amp_HF,
+                    mode="markers",
+                    line=dict(width=2, color="blue"),
+                    marker=dict(size=9, color="blue"),
+                    name=f"A_HF, H = {H_fix} mT",
+                ),
+                row=3,
+                col=3,
+            )
+        fig.update_xaxes(title_text="Temperature (K)", row=3, col=3)
     else:
         for T_fix, pts in freq_vs_H.items():
             H_vals, fLF, fHF = zip(*pts)
@@ -952,16 +1128,74 @@ def visualize_without_spectra(
                 col=3,
             )
         fig.update_xaxes(title_text="Magnetic field (mT)", row=1, col=3)
+        for T_fix, pts in tau_vs_H.items():
+            H_vals, tau_LF, tau_HF = zip(*pts)
+            fig.add_trace(
+                go.Scatter(
+                    x=H_vals,
+                    y=tau_LF,
+                    mode="markers",
+                    line=dict(width=2, color="red"),
+                    marker=dict(size=9, color="red"),
+                    name=f"tau_LF, T = {T_fix} K",
+                ),
+                row=2,
+                col=3,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=H_vals,
+                    y=tau_HF,
+                    mode="markers",
+                    line=dict(width=2, color="blue"),
+                    marker=dict(size=9, color="blue"),
+                    name=f"tau_HF, T = {T_fix} K",
+                ),
+                row=2,
+                col=3,
+            )
+        fig.update_xaxes(title_text="Magnetic field (mT)", row=2, col=3)
+        for T_fix, pts in amp_vs_H.items():
+            H_vals, amp_LF, amp_HF = zip(*pts)
+            fig.add_trace(
+                go.Scatter(
+                    x=H_vals,
+                    y=amp_LF,
+                    mode="markers",
+                    line=dict(width=2, color="red"),
+                    marker=dict(size=9, color="red"),
+                    name=f"A_LF, T = {T_fix} K",
+                ),
+                row=3,
+                col=3,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=H_vals,
+                    y=amp_HF,
+                    mode="markers",
+                    line=dict(width=2, color="blue"),
+                    marker=dict(size=9, color="blue"),
+                    name=f"A_HF, T = {T_fix} K",
+                ),
+                row=3,
+                col=3,
+            )
+        fig.update_xaxes(title_text="Magnetic field (mT)", row=3, col=3)
     fig.update_yaxes(title_text="Frequency (GHz)", row=1, col=3)
+    fig.update_yaxes(title_text="Tau (ns)", row=2, col=3)
+    fig.update_yaxes(title_text="Amplitude", row=3, col=3)
 
     if theory_curves is not None:
-        axis, hf_th, lf_th = theory_curves
+        axis, hf_th, lf_th, tau_lf_th, tau_hf_th = theory_curves
         var_vals = [key_func(ds_lf) for ds_lf, _ in triples_sorted]
         lo, hi = min(var_vals), max(var_vals)
         mask = (axis >= lo) & (axis <= hi)
         axis = axis[mask]
         hf_th = hf_th[mask]
         lf_th = lf_th[mask]
+        tau_lf_th = tau_lf_th[mask] if tau_lf_th is not None else None
+        tau_hf_th = tau_hf_th[mask] if tau_hf_th is not None else None
         col_idx = 3
         fig.add_trace(
             go.Scatter(
@@ -985,13 +1219,36 @@ def visualize_without_spectra(
             row=1,
             col=col_idx,
         )
+        if tau_lf_th is not None and tau_hf_th is not None:
+            fig.add_trace(
+                go.Scatter(
+                    x=axis,
+                    y=tau_lf_th,
+                    mode="lines",
+                    line=dict(color="red", dash="dot"),
+                    name="tau_LF theory",
+                ),
+                row=2,
+                col=col_idx,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=axis,
+                    y=tau_hf_th,
+                    mode="lines",
+                    line=dict(color="blue", dash="dot"),
+                    name="tau_HF theory",
+                ),
+                row=2,
+                col=col_idx,
+            )
 
     fig.update_layout(
         showlegend=False,
         hovermode="x unified",
         font=dict(size=16),
         width=2000,
-        height=1000,
+        height=1200,
         paper_bgcolor="white",
         plot_bgcolor="white",
     )
@@ -1067,6 +1324,50 @@ def visualize_without_spectra(
         gridcolor="#cccccc",
         gridwidth=1,
         row=1,
+        col=3,
+    )
+    fig.update_xaxes(
+        showline=True,
+        linewidth=1,
+        linecolor="black",
+        mirror=True,
+        showgrid=True,
+        gridcolor="#cccccc",
+        gridwidth=1,
+        row=2,
+        col=3,
+    )
+    fig.update_yaxes(
+        showline=True,
+        linewidth=1,
+        linecolor="black",
+        mirror=True,
+        showgrid=True,
+        gridcolor="#cccccc",
+        gridwidth=1,
+        row=2,
+        col=3,
+    )
+    fig.update_xaxes(
+        showline=True,
+        linewidth=1,
+        linecolor="black",
+        mirror=True,
+        showgrid=True,
+        gridcolor="#cccccc",
+        gridwidth=1,
+        row=3,
+        col=3,
+    )
+    fig.update_yaxes(
+        showline=True,
+        linewidth=1,
+        linecolor="black",
+        mirror=True,
+        showgrid=True,
+        gridcolor="#cccccc",
+        gridwidth=1,
+        row=3,
         col=3,
     )
 

@@ -15,10 +15,15 @@ from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
 MAX_COST = 100
 
 
-def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
-    """Load first-approximation frequencies if file exists.
+def _load_guess(
+    directory: Path, field_mT: int, temp_K: int
+) -> tuple[float, float, float, float] | None:
+    """Load first-approximation frequencies and damping times if file exists.
 
-    Returns tuple (f_lf_Hz, f_hf_Hz) or None.
+    Returns tuple ``(f_lf_Hz, f_hf_Hz, tau_lf_s, tau_hf_s)`` or ``None`` when the
+    guess file is absent or malformed.  File rows contain: axis values, HF
+    frequencies, LF frequencies, HF damping times ``τ`` and LF ``τ`` in
+    nanoseconds; the latter are converted to seconds.
     """
     path_H = directory / f"H_{field_mT}.npy"
     path_T = directory / f"T_{temp_K}.npy"
@@ -35,15 +40,19 @@ def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, flo
     except Exception as exc:
         logger.warning("Не удалось загрузить %s: %s", path, exc)
         return None
-    if arr.shape[0] < 3:
+    if arr.shape[0] < 5:
         return None
     axis = arr[0]
     hf = arr[1]
     lf = arr[2]
+    tau_hf_ns = arr[3]
+    tau_lf_ns = arr[4]
     idx = int(np.argmin(np.abs(axis - axis_value)))
     f_lf_GHz = float(lf[idx])
     f_hf_GHz = float(hf[idx])
-    return f_lf_GHz * GHZ, f_hf_GHz * GHZ
+    tau_lf_s = float(tau_lf_ns[idx]) * 1e-9
+    tau_hf_s = float(tau_hf_ns[idx]) * 1e-9
+    return f_lf_GHz * GHZ, f_hf_GHz * GHZ, tau_lf_s, tau_hf_s
 
 def burg(x: NDArray, order: int = 8):
     """Простейшая реализация AR‑Burg."""
@@ -633,10 +642,14 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
 
     if guess is not None:
-        f1_guess, f2_guess = guess
+        f1_guess, f2_guess, tau1_guess, tau2_guess = guess
+        z1_guess, z2_guess = 1.0 / tau1_guess, 1.0 / tau2_guess
+        ds_lf.zeta1 = z1_guess
+        ds_hf.zeta2 = z2_guess
         logger.info(
             "(%d, %d): использованы предварительные оценки f1=%.3f ГГц, f2=%.3f ГГц",
-            ds_lf.temp_K, ds_lf.field_mT, f1_guess/GHZ, f2_guess/GHZ)
+            ds_lf.temp_K, ds_lf.field_mT, f1_guess / GHZ, f2_guess / GHZ,
+        )
         spec_lf_c, spec_hf_c, fs_common = _prepare_signals()
         f_all, zeta_all = multichannel_esprit([spec_lf_c, spec_hf_c], fs_common)
         mask_hf = (
@@ -644,16 +657,21 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             & (HF_BAND[0] <= f_all)
             & (f_all <= HF_BAND[1])
             & (np.abs(f_all - f2_guess) <= 7 * GHZ)
+            & (np.abs(zeta_all - z2_guess) <= 0.2 * z2_guess)
         )
         logger.debug("ESPRIT HF filtered: %s", np.round(f_all[mask_hf] / GHZ, 3))
         if not np.any(mask_hf):
             mask_hf = (HF_BAND[0] <= f_all) & (f_all <= HF_BAND[1])
             logger.debug("ESPRIT HF relaxed: %s", np.round(f_all[mask_hf] / GHZ, 3))
-        hf_cand = _top2_nearest(f_all[mask_hf], np.maximum(zeta_all[mask_hf], 0.0), f2_guess) if np.any(mask_hf) else []
+        hf_cand = (
+            _top2_nearest(f_all[mask_hf], np.maximum(zeta_all[mask_hf], 0.0), f2_guess)
+            if np.any(mask_hf)
+            else []
+        )
         if not hf_cand:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
             range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
-            logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
+            logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0] / GHZ, range_hf[1] / GHZ)
             f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_guess)
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
@@ -663,28 +681,38 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             & (LF_BAND[0] <= f_all)
             & (f_all <= LF_BAND[1])
             & (np.abs(f_all - f1_guess) <= 5 * GHZ)
+            & (np.abs(zeta_all - z1_guess) <= 0.2 * z1_guess)
         )
         logger.debug("ESPRIT LF filtered: %s", np.round(f_all[mask_lf] / GHZ, 3))
         lf_cand = _top2_nearest(f_all[mask_lf], zeta_all[mask_lf], f1_guess) if np.any(mask_lf) else []
         if not lf_cand:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
             range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
-            logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
-            f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
-                                        range_lf, f1_guess,
-                                        avoid=hf_cand[0][0] if hf_cand else None)
+            logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0] / GHZ, range_lf[1] / GHZ)
+            f1_fallback = _fallback_peak(
+                t_lf,
+                y_lf,
+                ds_lf.ts.meta.fs,
+                range_lf,
+                f1_guess,
+                avoid=hf_cand[0][0] if hf_cand else None,
+            )
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
             lf_cand = [(f1_fallback, None)]
-        def _ensure_guess(cands, freq):
+
+        def _ensure_guess(cands, freq, zeta):
             for f, _ in cands:
                 if abs(f - freq) < 20e6:
                     return
-            cands.append((freq, None))
-        _ensure_guess(lf_cand, f1_guess)
-        _ensure_guess(hf_cand, f2_guess)
-        freq_bounds = ((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
-                       (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
+            cands.append((freq, zeta))
+
+        _ensure_guess(lf_cand, f1_guess, z1_guess)
+        _ensure_guess(hf_cand, f2_guess, z2_guess)
+        freq_bounds = (
+            (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
+            (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ),
+        )
     else:
         logger.info("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
@@ -1125,7 +1153,10 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
         guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
 
     if guess is not None:
-        f1_guess, f2_guess = guess
+        f1_guess, f2_guess, tau1_guess, tau2_guess = guess
+        z1_guess, z2_guess = 1.0 / tau1_guess, 1.0 / tau2_guess
+        ds_lf.zeta1 = z1_guess
+        ds_lf.zeta2 = z2_guess
         logger.info(
             "(%d, %d): использованы предварительные оценки f1=%.3f ГГц, f2=%.3f ГГц",
             ds_lf.temp_K,
@@ -1143,10 +1174,15 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
             & (HF_BAND[0] <= f_all_hf)
             & (f_all_hf <= HF_BAND[1])
             & (np.abs(f_all_hf - f2_guess) <= 7 * GHZ)
+            & (np.abs(zeta_all_hf - z2_guess) <= 0.2 * z2_guess)
         )
-        hf_cand = _top2_nearest(
-            f_all_hf[mask_hf], np.maximum(zeta_all_hf[mask_hf], 0.0), f2_guess
-        ) if np.any(mask_hf) else []
+        hf_cand = (
+            _top2_nearest(
+                f_all_hf[mask_hf], np.maximum(zeta_all_hf[mask_hf], 0.0), f2_guess
+            )
+            if np.any(mask_hf)
+            else []
+        )
         if not hf_cand:
             logger.warning(
                 f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для HF (LF only)"
@@ -1170,8 +1206,13 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
             & (LF_BAND[0] <= f_all_lf)
             & (f_all_lf <= LF_BAND[1])
             & (np.abs(f_all_lf - f1_guess) <= 5 * GHZ)
+            & (np.abs(zeta_all_lf - z1_guess) <= 0.2 * z1_guess)
         )
-        lf_cand = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_guess) if np.any(mask_lf) else []
+        lf_cand = (
+            _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_guess)
+            if np.any(mask_lf)
+            else []
+        )
         if not lf_cand:
             logger.warning(
                 f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF (LF only)"
@@ -1194,14 +1235,14 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
                 raise RuntimeError("LF-тон не найден")
             lf_cand = [(f1_fallback, None)]
 
-        def _ensure_guess(cands, freq):
+        def _ensure_guess(cands, freq, zeta):
             for f, _ in cands:
                 if abs(f - freq) < 20e6:
                     return
-            cands.append((freq, None))
+            cands.append((freq, zeta))
 
-        _ensure_guess(lf_cand, f1_guess)
-        _ensure_guess(hf_cand, f2_guess)
+        _ensure_guess(lf_cand, f1_guess, z1_guess)
+        _ensure_guess(hf_cand, f2_guess, z2_guess)
         freq_bounds = (
             (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
             (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ),

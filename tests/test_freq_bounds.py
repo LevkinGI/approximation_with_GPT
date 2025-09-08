@@ -14,7 +14,9 @@ def test_no_debug_when_freqs_within_bounds(monkeypatch, tmp_path, caplog):
     lf = _make_ds("LF", tmp_path)
     hf = _make_ds("HF", tmp_path)
 
-    monkeypatch.setattr(fit, "_load_guess", lambda *args, **kwargs: (10 * GHZ, 40 * GHZ))
+    monkeypatch.setattr(
+        fit, "_load_guess", lambda *args, **kwargs: (10 * GHZ, 40 * GHZ, 1.0, 1.0)
+    )
 
     def fake_esprit(r, fs, p=6):
         return np.array([10 * GHZ, 40 * GHZ]), np.array([1.0, 1.0])
