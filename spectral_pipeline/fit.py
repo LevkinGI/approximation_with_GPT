@@ -373,7 +373,12 @@ def multichannel_esprit(r_list: List[NDArray], fs: float, p: int = 6
         f, zeta = _esprit_freqs_and_decay(r_list[0][:N], fs, p)
     logger.debug("ESPRIT raw freqs: %s", np.round(f / GHZ, 3))
     logger.debug("ESPRIT raw zeta: %s", np.round(zeta, 3))
-    tau = np.where(zeta != 0, 1.0 / zeta, np.inf)
+    valid = np.isfinite(zeta) & (zeta > 0)
+    removed = int(zeta.size - np.count_nonzero(valid))
+    if removed:
+        logger.debug("Discarded %d components with non-positive tau", removed)
+    f = f[valid]
+    tau = 1.0 / np.abs(zeta[valid])
     return f, tau
 
 
@@ -391,7 +396,12 @@ def _esprit_freqs_and_decay(r: NDArray, fs: float, p: int = 6
     zeta = -np.log(np.abs(lam)) / dt
     logger.debug("ESPRIT raw freqs: %s", np.round(f / GHZ, 3))
     logger.debug("ESPRIT raw zeta: %s", np.round(zeta, 3))
-    tau = np.where(zeta != 0, 1.0 / zeta, np.inf)
+    valid = np.isfinite(zeta) & (zeta > 0)
+    removed = int(zeta.size - np.count_nonzero(valid))
+    if removed:
+        logger.debug("Discarded %d components with non-positive tau", removed)
+    f = f[valid]
+    tau = 1.0 / np.abs(zeta[valid])
     return f, tau
 
 
@@ -595,18 +605,20 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         spec_lf_c, spec_hf_c, fs_common = _prepare_signals()
         f_all, tau_all = multichannel_esprit([spec_lf_c, spec_hf_c], fs_common)
         mask_hf = (
-            (tau_all > -2e-9)
-            & (HF_BAND[0] <= f_all)
+            (HF_BAND[0] <= f_all)
             & (f_all <= HF_BAND[1])
             & (np.abs(f_all - f2_rough) <= 7 * GHZ)
         )
         logger.debug("ESPRIT HF filtered: %s", np.round(f_all[mask_hf] / GHZ, 3))
         if not np.any(mask_hf):
-            mask_hf = (HF_BAND[0] <= f_all) & (f_all <= HF_BAND[1])
+            mask_hf = (
+                (HF_BAND[0] <= f_all)
+                & (f_all <= HF_BAND[1])
+                & (np.abs(f_all - f2_rough) <= 10 * GHZ)
+            )
             logger.debug("ESPRIT HF relaxed: %s", np.round(f_all[mask_hf] / GHZ, 3))
         if np.any(mask_hf):
-            hf_c = [(f, z if z > 0 else None)
-                    for f, z in zip(f_all[mask_hf], tau_all[mask_hf])]
+            hf_c = [(f, z) for f, z in zip(f_all[mask_hf], tau_all[mask_hf])]
         else:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
             range_hf = (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ) if f2_rough is not None else HF_BAND
@@ -650,8 +662,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         spec_lf_c, spec_hf_c, fs_common = _prepare_signals()
         f_all, tau_all = multichannel_esprit([spec_lf_c, spec_hf_c], fs_common)
         mask_hf = (
-            (tau_all > -2e-9)
-            & (HF_BAND[0] <= f_all)
+            (HF_BAND[0] <= f_all)
             & (f_all <= HF_BAND[1])
             & (np.abs(f_all - f2_guess) <= 7 * GHZ)
         )
@@ -659,9 +670,15 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             mask_hf &= np.abs(tau_all - tau_hf_guess) <= 0.2 * tau_hf_guess
         logger.debug("ESPRIT HF filtered: %s", np.round(f_all[mask_hf] / GHZ, 3))
         if not np.any(mask_hf):
-            mask_hf = (HF_BAND[0] <= f_all) & (f_all <= HF_BAND[1])
+            mask_hf = (
+                (HF_BAND[0] <= f_all)
+                & (f_all <= HF_BAND[1])
+                & (np.abs(f_all - f2_guess) <= 10 * GHZ)
+            )
+            if tau_hf_guess is not None:
+                mask_hf &= np.abs(tau_all - tau_hf_guess) <= 0.2 * tau_hf_guess
             logger.debug("ESPRIT HF relaxed: %s", np.round(f_all[mask_hf] / GHZ, 3))
-        hf_cand = _top2_nearest(f_all[mask_hf], np.maximum(tau_all[mask_hf], 0.0), f2_guess) if np.any(mask_hf) else []
+        hf_cand = _top2_nearest(f_all[mask_hf], tau_all[mask_hf], f2_guess) if np.any(mask_hf) else []
         if not hf_cand:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
             range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
@@ -1058,8 +1075,7 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
         spec_hf = residual - np.mean(residual)
         f_all_hf, tau_all_hf = _esprit_freqs_and_decay(spec_hf, ds_lf.ts.meta.fs)
         mask_hf = (
-            (tau_all_hf > -2e-9)
-            & (HF_BAND[0] <= f_all_hf)
+            (HF_BAND[0] <= f_all_hf)
             & (f_all_hf <= HF_BAND[1])
             & (np.abs(f_all_hf - f2_rough) <= 7 * GHZ)
         )
@@ -1067,11 +1083,18 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
             "ESPRIT HF filtered (LF only): %s",
             np.round(f_all_hf[mask_hf] / GHZ, 3),
         )
+        if not np.any(mask_hf):
+            mask_hf = (
+                (HF_BAND[0] <= f_all_hf)
+                & (f_all_hf <= HF_BAND[1])
+                & (np.abs(f_all_hf - f2_rough) <= 10 * GHZ)
+            )
+            logger.debug(
+                "ESPRIT HF relaxed (LF only): %s",
+                np.round(f_all_hf[mask_hf] / GHZ, 3),
+            )
         if np.any(mask_hf):
-            hf_c = [
-                (f, z if z > 0 else None)
-                for f, z in zip(f_all_hf[mask_hf], tau_all_hf[mask_hf])
-            ]
+            hf_c = [(f, z) for f, z in zip(f_all_hf[mask_hf], tau_all_hf[mask_hf])]
         else:
             logger.warning(
                 f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для HF (LF only)"
@@ -1155,15 +1178,22 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
         spec_hf = residual - np.mean(residual)
         f_all_hf, tau_all_hf = _esprit_freqs_and_decay(spec_hf, ds_lf.ts.meta.fs)
         mask_hf = (
-            (tau_all_hf > -2e-9)
-            & (HF_BAND[0] <= f_all_hf)
+            (HF_BAND[0] <= f_all_hf)
             & (f_all_hf <= HF_BAND[1])
             & (np.abs(f_all_hf - f2_guess) <= 7 * GHZ)
         )
         if tau_hf_guess is not None:
             mask_hf &= np.abs(tau_all_hf - tau_hf_guess) <= 0.2 * tau_hf_guess
+        if not np.any(mask_hf):
+            mask_hf = (
+                (HF_BAND[0] <= f_all_hf)
+                & (f_all_hf <= HF_BAND[1])
+                & (np.abs(f_all_hf - f2_guess) <= 10 * GHZ)
+            )
+            if tau_hf_guess is not None:
+                mask_hf &= np.abs(tau_all_hf - tau_hf_guess) <= 0.2 * tau_hf_guess
         hf_cand = _top2_nearest(
-            f_all_hf[mask_hf], np.maximum(tau_all_hf[mask_hf], 0.0), f2_guess
+            f_all_hf[mask_hf], tau_all_hf[mask_hf], f2_guess
         ) if np.any(mask_hf) else []
         if not hf_cand:
             logger.warning(
