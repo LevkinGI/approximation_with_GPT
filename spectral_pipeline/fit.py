@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 from scipy.optimize import least_squares
 from scipy.signal import welch, find_peaks, get_window
 
-from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
+from . import DataSet, FittingResult, GHZ, NS, PI, logger, LF_BAND, HF_BAND
 
 # Maximum acceptable fitting cost. Pairs with higher cost are rejected
 # and treated as unsuccessful.
