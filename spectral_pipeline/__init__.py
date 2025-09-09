@@ -54,8 +54,8 @@ class TimeSeries:
 class FittingResult:
     f1: float
     f2: float
-    zeta1: float
-    zeta2: float
+    tau1: float
+    tau2: float
     phi1: float
     phi2: float
     A1: float
@@ -78,7 +78,7 @@ class DataSet:
     ts     : временной ряд
 
     f1_init, f2_init – грубые оценки частот
-    zeta1, zeta2     – оценки затухания
+    tau1, tau2       – оценки времени затухания
     fit              – результат аппроксимации
     freq_fft, asd_fft – спектр сигнала
     """
@@ -91,8 +91,8 @@ class DataSet:
     # начальные оценки из Coarse + ESPRIT
     f1_init: float = 0.0
     f2_init: float = 0.0
-    zeta1: Optional[float] = None
-    zeta2: Optional[float] = None
+    tau1: Optional[float] = None
+    tau2: Optional[float] = None
 
     # окончательный результат
     fit: FittingResult | None = field(default_factory=lambda: None)

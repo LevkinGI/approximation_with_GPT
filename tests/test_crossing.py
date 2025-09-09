@@ -32,8 +32,8 @@ def test_ignore_hf_after_crossing(monkeypatch, tmp_path):
     fit_res = FittingResult(
         f1=10 * GHZ,
         f2=40 * GHZ,
-        zeta1=1.0,
-        zeta2=1.0,
+        tau1=1.0,
+        tau2=1.0,
         phi1=0.0,
         phi2=0.0,
         A1=1.0,
