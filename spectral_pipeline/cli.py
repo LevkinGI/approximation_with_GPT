@@ -45,6 +45,7 @@ def _find_crossing(root: str, field_mT: int, temp_K: int):
 
 def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
                        outfile: Path | None = None) -> None:
+    """Export fitted LF/HF frequencies into an Excel workbook."""
     logger.info("Экспорт таблиц частот")
     recs = []
     for lf, hf in triples:
@@ -84,6 +85,7 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
 def main(data_dir: str = '.', *, return_datasets: bool = False,
          do_plot: bool = True, excel_path: str | None = None,
          log_level: str = "DEBUG"):
+    """Command-line entry point orchestrating the full processing pipeline."""
     level = getattr(logging, log_level.upper(), logging.INFO)
     logger.setLevel(level)
     for h in logger.handlers:
@@ -145,6 +147,7 @@ def main(data_dir: str = '.', *, return_datasets: bool = False,
 
 
 def demo(data_dir: str | Path = "."):
+    """Convenience helper that runs pipeline and opens stacked plot."""
     triples = main(data_dir, return_datasets=True, do_plot=False)
     if not triples:
         raise RuntimeError("Не найдено корректных пар LF/HF")

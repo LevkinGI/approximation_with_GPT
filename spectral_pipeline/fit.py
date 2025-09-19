@@ -241,6 +241,15 @@ def _peak_in_band(
 def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, float],
                    f_rough: float, avoid: float | None = None, df_min: float = 0.5 * GHZ,
                    order_burg: int = 8, n_avg_fft: int = 4) -> float | None:
+    """Search for a dominant peak when FFT-based search fails.
+
+    The function combines several lightweight spectral estimators (Burg AR,
+    Welch PSD and averaged FFT) inside the requested frequency ``f_range``.
+    Candidates that are closer than ``df_min`` to ``avoid`` are skipped. The
+    best candidate is selected primarily by its amplitude and secondarily by
+    proximity to ``f_rough``. Returns frequency in Hz or ``None`` if all
+    estimators fail.
+    """
     logger.debug(
         "Fallback search: range=[%.1f, %.1f] ГГц, avoid=%s", f_range[0]/GHZ,
         f_range[1]/GHZ, None if avoid is None else f"{avoid/GHZ:.3f}")
@@ -266,6 +275,7 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         logger.debug("Burg failed: %s", exc)
 
     def _welch_peak() -> tuple[float | None, float]:
+        """Return peak frequency and amplitude using Welch PSD within range."""
         f, P = welch(y, fs=fs, nperseg=nperseg,
                      detrend='constant', scaling='density')
         mask = (f >= f_range[0]) & (f <= f_range[1])
@@ -277,6 +287,7 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
         return float(f[mask][idx]), float(P[mask][idx])
 
     def _avg_fft_peak() -> tuple[float | None, float]:
+        """Return peak for averaged FFT spectrum computed over segments."""
         seg_len = len(y) // n_avg_fft
         if seg_len < 8:
             return None, 0.0
@@ -314,6 +325,7 @@ def _fallback_peak(t: NDArray, y: NDArray, fs: float, f_range: Tuple[float, floa
 
 def _top2_nearest(freqs: NDArray, taus: NDArray, f0: float
                   ) -> List[Tuple[float, Optional[float]]]:
+    """Pick up to four components closest to ``f0`` preserving tau values."""
     if freqs.size == 0:
         return []
     idx = np.argsort(np.abs(freqs - f0))[:4]
@@ -321,6 +333,7 @@ def _top2_nearest(freqs: NDArray, taus: NDArray, f0: float
 
 
 def _hankel_matrix(x: NDArray, L: int) -> NDArray:
+    """Construct a Hankel matrix used by ESPRIT from signal ``x``."""
     N = len(x)
     if L <= 0 or L >= N:
         raise ValueError("L must satisfy 0 < L < N")
@@ -384,6 +397,7 @@ def multichannel_esprit(r_list: List[NDArray], fs: float, p: int = 6
 
 def _esprit_freqs_and_decay(r: NDArray, fs: float, p: int = 6
                             ) -> Tuple[NDArray, NDArray]:
+    """Fallback single-channel ESPRIT returning frequency and tau arrays."""
     L = len(r) // 2
     H = _hankel_matrix(r, L)
     U, _, _ = np.linalg.svd(H, full_matrices=False)
@@ -406,6 +420,7 @@ def _esprit_freqs_and_decay(r: NDArray, fs: float, p: int = 6
 
 
 def _core_signal(t: NDArray, A1, A2, tau1, tau2, f1, f2, phi1, phi2) -> NDArray:
+    """Model signal consisting of two exponentially damped cosines."""
     return (
         A1 * np.exp(-t / tau1) * np.cos(2 * np.pi * f1 * t + phi1) +
         A2 * np.exp(-t / tau2) * np.cos(2 * np.pi * f2 * t + phi2)
@@ -414,6 +429,7 @@ def _core_signal(t: NDArray, A1, A2, tau1, tau2, f1, f2, phi1, phi2) -> NDArray:
 
 def _single_sine_refine(t: NDArray, y: NDArray, f0: float
                         ) -> tuple[float, float, float, float]:
+    """Refine sine parameters (freq, phase, amplitude, tau) near ``f0``."""
     A0 = 0.5 * (y.max() - y.min())
     tau0 = (t[-1] - t[0]) / 3
     p0 = [A0, f0, 0.0, tau0, y.mean()]
@@ -421,6 +437,7 @@ def _single_sine_refine(t: NDArray, y: NDArray, f0: float
     hi = np.array([3*A0, HF_BAND[1], np.pi, tau0*10, y.max() + abs(np.ptp(y))])
 
     def model(p):
+        """Evaluate damped cosine with offset for optimisation."""
         A, f, phi, tau, C = p
         return A * np.exp(-t/tau) * np.cos(2*np.pi*f*t + phi) + C
 
@@ -431,10 +448,12 @@ def _single_sine_refine(t: NDArray, y: NDArray, f0: float
 
 def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
              freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
+    """Perform non-linear least squares fit for coupled LF/HF datasets."""
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
     def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
+        """Down-weight late-time samples to reduce tail domination."""
         if t.size == 0:
             return np.ones_like(t)
         t_min = t.min()
@@ -507,6 +526,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     ])
 
     def residuals(p):
+        """Stack weighted LF and HF residuals for least-squares solver."""
         (k_lf, k_hf, C_lf, C_hf,
          A1, A2, tau1, tau2,
          f1_, f2_, phi1_, phi2_) = p
@@ -569,13 +589,14 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
 
 def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
+    """Select tone candidates for LF/HF pair and run the joint fitting."""
     logger.info("Обработка пары T=%d K, H=%d mT", ds_lf.temp_K, ds_lf.field_mT)
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
     def _prepare_signals() -> tuple[NDArray, NDArray, float]:
-        """Return LF/HF signals aligned to a common sampling rate."""
+        """Return demeaned LF/HF signals aligned to a common sampling rate."""
         spec_lf = y_lf - np.mean(y_lf)
         spec_hf = y_hf - np.mean(y_hf)
         fs_lf = ds_lf.ts.meta.fs
@@ -596,6 +617,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     def _search_candidates() -> tuple[list[tuple[float, Optional[float]]],
                                       list[tuple[float, Optional[float]]],
                                       tuple[tuple[float, float], tuple[float, float]] | None]:
+        """Build candidate pools via ESPRIT when no theory file is present."""
         f1_rough, phi1, A1, tau1 = _single_sine_refine(t_lf, y_lf, f0=10 * GHZ)
         proto_lf = A1 * np.exp(-t_hf / tau1) * np.cos(2 * np.pi * f1_rough * t_hf + phi1)
         residual = y_hf - proto_lf
@@ -708,6 +730,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
                 raise RuntimeError("LF-тон не найден")
             lf_cand = [(f1_fallback, tau_lf_guess)]
         def _ensure_guess(cands, freq, tau):
+            """Add theoretical guess to candidates if it is missing."""
             for f, _ in cands:
                 if abs(f - freq) < 20e6:
                     return
@@ -761,6 +784,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             f"({ds_lf.temp_K}, {ds_lf.field_mT}): в полосе {range_hf} ГГц пиков не найдено")
 
     def _append_unique(target_list, new_freq_hz):
+        """Append FFT peak to list when it is not close to existing items."""
         if new_freq_hz is None:
             return
         for old_f, _ in target_list:
@@ -898,9 +922,11 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
 
 def fit_single(ds: DataSet,
                freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
+    """Fit LF signal when the HF record is absent (single-channel mode)."""
     t, y = ds.ts.t, ds.ts.s
 
     def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
+        """Gradually reduce weights towards the tail of the signal."""
         if t.size == 0:
             return np.ones_like(t)
         t_min = t.min()
@@ -985,6 +1011,7 @@ def fit_single(ds: DataSet,
     ])
 
     def residuals(p):
+        """Residual vector used by the LF-only least-squares solver."""
         (k, C, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_) = p
         core = _core_signal(t, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
         return w * (k * core + C - y)
@@ -1051,6 +1078,7 @@ def fit_single(ds: DataSet,
 
 
 def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
+    """Process datasets beyond crossing where HF data are unavailable."""
     logger.info(
         "LF-only обработка пары T=%d K, H=%d mT",
         ds_lf.temp_K,
@@ -1063,6 +1091,7 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
         list[tuple[float, Optional[float]]],
         tuple[tuple[float, float], tuple[float, float]] | None,
     ]:
+        """Select LF/HF candidate tones when only LF data are measured."""
         f1_rough, phi1, A1, tau1 = _single_sine_refine(t, y, f0=10 * GHZ)
         proto = A1 * np.exp(-t / tau1) * np.cos(2 * np.pi * f1_rough * t + phi1)
         residual = y - proto
@@ -1245,6 +1274,7 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
             lf_cand = [(f1_fallback, None)]
 
         def _ensure_guess(cands, freq, tau):
+            """Inject theoretical guess into candidate list if absent."""
             for f, _ in cands:
                 if abs(f - freq) < 20e6:
                     return
