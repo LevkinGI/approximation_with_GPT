@@ -9,10 +9,22 @@ from scipy.optimize import least_squares
 from scipy.signal import welch, find_peaks, get_window
 
 from . import DataSet, FittingResult, GHZ, NS, PI, logger, LF_BAND, HF_BAND
+from .filtering import bandpass_filter_signal
 
 # Maximum acceptable fitting cost. Pairs with higher cost are rejected
 # and treated as unsuccessful.
 MAX_COST = 100
+
+
+def _ensure_bandpassed(*datasets: DataSet) -> None:
+    """Apply the mandatory 2–80 ГГц band-pass filter to datasets."""
+
+    for ds in datasets:
+        if ds is None:
+            continue
+        if not ds.bandpass_applied:
+            ds.ts.s = bandpass_filter_signal(ds.ts.s, ds.ts.meta.fs)
+            ds.bandpass_applied = True
 
 
 def _load_guess(
@@ -449,6 +461,7 @@ def _single_sine_refine(t: NDArray, y: NDArray, f0: float
 def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
              freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
     """Perform non-linear least squares fit for coupled LF/HF datasets."""
+    _ensure_bandpassed(ds_lf, ds_hf)
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
@@ -592,6 +605,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
     """Select tone candidates for LF/HF pair and run the joint fitting."""
     logger.info("Обработка пары T=%d K, H=%d mT", ds_lf.temp_K, ds_lf.field_mT)
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
+    _ensure_bandpassed(ds_lf, ds_hf)
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
@@ -923,6 +937,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
 def fit_single(ds: DataSet,
                freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
     """Fit LF signal when the HF record is absent (single-channel mode)."""
+    _ensure_bandpassed(ds)
     t, y = ds.ts.t, ds.ts.s
 
     def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
@@ -1084,6 +1099,7 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
         ds_lf.temp_K,
         ds_lf.field_mT,
     )
+    _ensure_bandpassed(ds_lf)
     t, y = ds_lf.ts.t, ds_lf.ts.s
 
     def _search_candidates_single() -> tuple[

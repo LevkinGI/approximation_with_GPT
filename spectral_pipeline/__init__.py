@@ -76,6 +76,7 @@ class DataSet:
     temp_K : температура (К)
     tag    : диапазон сигнала ('LF' или 'HF')
     ts     : временной ряд
+    bandpass_applied : признак применения полосового фильтра 2–80 ГГц
 
     f1_init, f2_init – грубые оценки частот
     tau1, tau2       – оценки времени затухания
@@ -87,6 +88,7 @@ class DataSet:
     tag: FREQ_TAG
     ts: TimeSeries
     root: Path | None = None
+    bandpass_applied: bool = False
 
     # начальные оценки из Coarse + ESPRIT
     f1_init: float = 0.0

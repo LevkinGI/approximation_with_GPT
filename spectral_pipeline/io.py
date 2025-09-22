@@ -6,6 +6,7 @@ from typing import List
 import numpy as np
 
 from . import DataSet, TimeSeries, RecordMeta, logger, GHZ, C_M_S
+from .filtering import bandpass_filter_signal
 
 
 def load_records(root: Path) -> List[DataSet]:
@@ -57,9 +58,18 @@ def load_records(root: Path) -> List[DataSet]:
             logger.warning("Пропуск %s: некорректный шаг dt", path.name)
             continue
         fs = 1.0 / dt
-        ts = TimeSeries(t=t, s=s, meta=RecordMeta(fs=fs))
-        datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag,
-                               ts=ts, root=data_dir))
+        s_filtered = bandpass_filter_signal(s, fs)
+        ts = TimeSeries(t=t, s=s_filtered, meta=RecordMeta(fs=fs))
+        datasets.append(
+            DataSet(
+                field_mT=field_mT,
+                temp_K=temp_K,
+                tag=tag,
+                ts=ts,
+                root=data_dir,
+                bandpass_applied=True,
+            )
+        )
         logger.info("Загружен %s: %d точек, fs=%.2f ГГц", path.name, len(t), fs / GHZ)
     logger.info("Загружено %d наборов", len(datasets))
     return datasets
