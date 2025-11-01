@@ -75,11 +75,10 @@ def visualize_stacked(
                     1 / p.zeta1, 1 / p.zeta2,
                     p.f1, p.f2, p.phi1, p.phi2,
                 )
-                y_fit = (
-                    p.k_lf * core + p.C_lf
-                    if ds.tag == "LF"
-                    else p.k_hf * core + p.C_hf
-                )
+                if ds.tag == "LF":
+                    y_fit = core + p.C_lf
+                else:
+                    y_fit = p.k_scale * core + p.C_hf
                 ranges.append(np.ptp(y_fit[mask]))
             else:
                 ranges.append(np.ptp(ds.ts.s))
@@ -201,7 +200,7 @@ def visualize_stacked(
                 p.phi1,
                 p.phi2,
             )
-            y_fit = p.k_lf * core + shift
+            y_fit = core + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_lf.ts.t / NS,
@@ -240,7 +239,7 @@ def visualize_stacked(
                 p.phi1,
                 p.phi2,
             )
-            y_fit = p.k_hf * core + shift
+            y_fit = p.k_scale * core + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_hf.ts.t / NS,
@@ -700,11 +699,10 @@ def visualize_without_spectra(
                     p.phi1,
                     p.phi2,
                 )
-                y_fit = (
-                    p.k_lf * core + p.C_lf
-                    if ds.tag == "LF"
-                    else p.k_hf * core + p.C_hf
-                )
+                if ds.tag == "LF":
+                    y_fit = core + p.C_lf
+                else:
+                    y_fit = p.k_scale * core + p.C_hf
                 ranges.append(np.ptp(y_fit[mask]))
             else:
                 ranges.append(np.ptp(ds.ts.s))
@@ -816,7 +814,7 @@ def visualize_without_spectra(
                 p.phi1,
                 p.phi2,
             )
-            y_fit = p.k_lf * core + shift
+            y_fit = core + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_lf.ts.t / NS,
@@ -855,7 +853,7 @@ def visualize_without_spectra(
                 p.phi1,
                 p.phi2,
             )
-            y_fit = p.k_hf * core + shift
+            y_fit = p.k_scale * core + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_hf.ts.t / NS,

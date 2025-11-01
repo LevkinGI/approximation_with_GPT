@@ -1,5 +1,6 @@
-import numpy as np
 import logging
+
+import numpy as np
 
 from spectral_pipeline import DataSet, TimeSeries, RecordMeta, FittingResult, GHZ
 from spectral_pipeline import cli
@@ -27,8 +28,7 @@ def test_success_count_and_export(monkeypatch, tmp_path, caplog):
         phi2=0.0,
         A1=1.0,
         A2=1.0,
-        k_lf=1.0,
-        k_hf=1.0,
+        k_scale=1.0,
         C_lf=0.0,
         C_hf=0.0,
         cost=1.0,
