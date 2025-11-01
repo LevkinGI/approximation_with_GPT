@@ -635,6 +635,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         centered = signal - float(np.mean(signal))
         return float(np.sqrt(np.mean(centered ** 2)))
 
+    hf_scale = 1.0
     hf_target_amp = _rms(y_hf)
     proto_amp = _rms(proto_lf_hf)
     if proto_amp > 0 and np.isfinite(hf_target_amp):
@@ -642,6 +643,8 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         if not np.isfinite(hf_scale) or hf_scale <= 0:
             hf_scale = 1.0
         proto_lf_hf = proto_lf_hf * hf_scale
+
+    A1_init *= hf_scale
 
     _, phi2_init, A2_init, tau2_init = _single_sine_refine(t_hf, y_hf - proto_lf_hf, f2_init)
     if ds_hf.zeta2 is None:
