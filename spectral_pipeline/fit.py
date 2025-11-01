@@ -628,6 +628,36 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         tau1_lo, tau1_hi = tau1_init * 0.8, tau1_init * 1.2
 
     proto_lf_hf = A1_init * np.exp(-t_hf / tau1_init) * np.cos(2 * PI * f1_init * t_hf + phi1_init)
+
+    def _amplitude_stats(signal: NDArray) -> tuple[float, float]:
+        if signal.size == 0:
+            return 0.0, 0.0
+        rms = float(np.sqrt(np.mean(np.square(signal))))
+        peak = float(np.max(np.abs(signal)))
+        return rms, peak
+
+    def _normalization_ratio(reference: NDArray, model: NDArray) -> float:
+        ref_rms, ref_peak = _amplitude_stats(reference)
+        model_rms, model_peak = _amplitude_stats(model)
+        ratios: list[float] = []
+        if model_rms > 0:
+            ratios.append(ref_rms / model_rms)
+        if model_peak > 0:
+            ratios.append(ref_peak / model_peak)
+        ratios = [float(r) for r in ratios if np.isfinite(r) and r > 0]
+        if ratios:
+            coeff = float(np.mean(ratios))
+            if np.isfinite(coeff) and coeff > 0:
+                return coeff
+        return 1.0
+
+    hf_norm_coeff = _normalization_ratio(y_hf, proto_lf_hf)
+    if not np.isfinite(hf_norm_coeff) or hf_norm_coeff <= 0:
+        hf_norm_coeff = 1.0
+
+    proto_lf_hf = proto_lf_hf * hf_norm_coeff
+    A1_init = A1_init * hf_norm_coeff
+
     _, phi2_init, A2_init, tau2_init = _single_sine_refine(t_hf, y_hf - proto_lf_hf, f2_init)
     if ds_hf.zeta2 is None:
         tau2_lo, tau2_hi = 5e-12, 5e-10
