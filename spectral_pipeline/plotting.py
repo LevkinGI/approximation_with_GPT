@@ -705,7 +705,6 @@ def visualize_stacked(
             row=r,
             col=4,
         )
-
     fig.update_xaxes(title_font=dict(size=28), tickfont=dict(size=24))
     fig.update_yaxes(title_font=dict(size=28), tickfont=dict(size=24))
 
@@ -1135,29 +1134,6 @@ def visualize_without_spectra(
         row=1,
         col=3,
     )
-    for r in (2, 3):
-        fig.update_xaxes(
-            showline=True,
-            linewidth=1,
-            linecolor="black",
-            mirror=True,
-            showgrid=True,
-            gridcolor="#cccccc",
-            gridwidth=1,
-            row=r,
-            col=4,
-        )
-        fig.update_yaxes(
-            showline=True,
-            linewidth=1,
-            linecolor="black",
-            mirror=True,
-            showgrid=True,
-            gridcolor="#cccccc",
-            gridwidth=1,
-            row=r,
-            col=4,
-        )
 
     fig.update_xaxes(title_font=dict(size=28), tickfont=dict(size=24))
     fig.update_yaxes(title_font=dict(size=28), tickfont=dict(size=24))
