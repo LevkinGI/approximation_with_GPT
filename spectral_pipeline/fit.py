@@ -651,11 +651,12 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         tau2_lo, tau2_hi = tau2_init * 0.8, tau2_init * 1.2
 
     k_lf_init = 1
+    k_hf_init = 1
     C_lf_init = np.mean(y_lf)
     C_hf_init = np.mean(y_hf)
 
     p0 = np.array([
-        k_lf_init,
+        k_lf_init, k_hf_init,
         C_lf_init, C_hf_init,
         A1_init,    A2_init,
         tau1_init,  tau2_init,
@@ -670,7 +671,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
 
     lo = np.array([
-        0.5,
+        0.5, 0.5,
         C_lf_init - np.std(y_lf), C_hf_init - np.std(y_hf),
         0.0, 0.0,
         tau1_lo, tau2_lo,
@@ -678,7 +679,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         -PI, -PI
     ])
     hi = np.array([
-        2,
+        2, 2,
         C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf),
         A1_init * 2, A2_init * 2,
         tau1_hi, tau2_hi,
@@ -687,14 +688,14 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     ])
 
     def residuals(p):
-        (k_lf, C_lf, C_hf,
+        (k_lf, k_hf, C_lf, C_hf,
          A1, A2, tau1, tau2,
          f1_, f2_, phi1_, phi2_) = p
 
         core_lf = _core_signal(t_lf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
         core_hf = _core_signal(t_hf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
         res_lf = w_lf * (k_lf * core_lf + C_lf - y_lf)
-        res_hf = core_hf + C_hf - y_hf
+        res_hf = k_hf * core_hf + C_hf - y_hf
 
         # Normalize channel residuals so that the sum of squares corresponds to
         # the mean squared error for each channel individually.
@@ -727,14 +728,14 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     except np.linalg.LinAlgError:
         cov = np.full((n, n), np.nan)
 
-    idx_f1 = 7
-    idx_f2 = 8
+    idx_f1 = 8
+    idx_f2 = 9
     sigma_f1 = math.sqrt(abs(cov[idx_f1, idx_f1]))
     sigma_f2 = math.sqrt(abs(cov[idx_f2, idx_f2]))
 
-    (k_lf, C_lf, C_hf,
-     A1, A2, tau1, tau2,
-     f1_fin, f2_fin, phi1_fin, phi2_fin) = p
+    (k_lf, k_hf, C_lf, C_hf,
+      A1, A2, tau1, tau2,
+      f1_fin, f2_fin, phi1_fin, phi2_fin) = p
     logger.debug(
         "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
         f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
@@ -749,6 +750,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         A1=A1,
         A2=A2,
         k_lf=k_lf,
+        k_hf=k_hf,
         C_lf=C_lf,
         C_hf=C_hf,
         f1_err=sigma_f1,
@@ -1080,6 +1082,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
             A1=best_fit.A2,
             A2=best_fit.A1,
             k_lf=best_fit.k_lf,
+            k_hf=best_fit.k_hf,
             C_lf=best_fit.C_lf,
             C_hf=best_fit.C_hf,
             f1_err=best_fit.f2_err,
@@ -1253,6 +1256,7 @@ def fit_single(ds: DataSet,
             A1=A1_fin,
             A2=A2_fin,
             k_lf=k_fin,
+            k_hf=float("nan"),
             C_lf=C_fin,
             C_hf=float("nan"),
             f1_err=sigma_f1,
@@ -1507,6 +1511,7 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
             A1=best_fit.A2,
             A2=best_fit.A1,
             k_lf=best_fit.k_lf,
+            k_hf=best_fit.k_hf,
             C_lf=best_fit.C_lf,
             C_hf=best_fit.C_hf,
             f1_err=best_fit.f2_err,

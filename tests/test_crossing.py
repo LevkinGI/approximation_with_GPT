@@ -39,6 +39,7 @@ def test_ignore_hf_after_crossing(monkeypatch, tmp_path):
         A1=1.0,
         A2=1.0,
         k_lf=1.0,
+        k_hf=1.0,
         C_lf=0.0,
         C_hf=0.0,
     )

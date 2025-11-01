@@ -61,6 +61,7 @@ class FittingResult:
     A1: float
     A2: float
     k_lf: float
+    k_hf: float
     C_lf: float
     C_hf: float
     f1_err: float | None = None
