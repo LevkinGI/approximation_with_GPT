@@ -628,6 +628,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         tau1_lo, tau1_hi = tau1_init * 0.8, tau1_init * 1.2
 
     proto_lf_hf = A1_init * np.exp(-t_hf / tau1_init) * np.cos(2 * PI * f1_init * t_hf + phi1_init)
+    A1_init_pre_scale = A1_init
 
     def _amplitude_stats(signal: NDArray) -> tuple[float, float]:
         if signal.size == 0:
@@ -693,10 +694,11 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         f1_lo, f2_lo,
         -PI, -PI
     ])
+    A1_bound_base = max(abs(A1_init_pre_scale), abs(A1_init))
     hi = np.array([
         2, 2,
         C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf),
-        A1_init * 2, A2_init * 2,
+        A1_bound_base * 2, A2_init * 2,
         tau1_hi, tau2_hi,
         f1_hi, f2_hi,
         PI, PI
