@@ -34,7 +34,7 @@ def test_success_count_and_export(monkeypatch, tmp_path, caplog):
         cost=1.0,
     )
 
-    def fake_process_pair(ds_lf, ds_hf):
+    def fake_process_pair(ds_lf, ds_hf, *, use_theory_guess=False):
         if ds_lf is lf1:
             ds_lf.fit = ds_hf.fit = fit_res
             return fit_res

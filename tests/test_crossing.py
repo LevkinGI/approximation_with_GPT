@@ -44,12 +44,12 @@ def test_ignore_hf_after_crossing(monkeypatch, tmp_path):
         C_hf=0.0,
     )
 
-    def fake_process_pair(ds_lf, ds_hf):
+    def fake_process_pair(ds_lf, ds_hf, *, use_theory_guess=False):
         called["pair"] += 1
         ds_lf.fit = ds_hf.fit = fit_res
         return fit_res
 
-    def fake_process_lf_only(ds_lf):
+    def fake_process_lf_only(ds_lf, *, use_theory_guess=False):
         called["lf"] += 1
         ds_lf.fit = fit_res
         return fit_res

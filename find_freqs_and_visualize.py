@@ -10,6 +10,12 @@ if __name__ == '__main__':
     parser.add_argument('--no-plot', action='store_true')
     parser.add_argument('--log-level', default='DEBUG',
                         help='уровень логирования (INFO, DEBUG и т.д.)')
+    parser.add_argument(
+        '--use-theory-guess',
+        action='store_true',
+        help='использовать теоретические значения в качестве первого приближения',
+    )
     args = parser.parse_args()
     main(args.data_dir, do_plot=not args.no_plot,
-         log_level=args.log_level)
+         log_level=args.log_level,
+         use_theory_guess=args.use_theory_guess)

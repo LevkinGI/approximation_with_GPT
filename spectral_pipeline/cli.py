@@ -81,9 +81,15 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
         return
 
 
-def main(data_dir: str = '.', *, return_datasets: bool = False,
-         do_plot: bool = True, excel_path: str | None = None,
-         log_level: str = "DEBUG"):
+def main(
+    data_dir: str = '.',
+    *,
+    return_datasets: bool = False,
+    do_plot: bool = True,
+    excel_path: str | None = None,
+    log_level: str = "DEBUG",
+    use_theory_guess: bool = False,
+):
     level = getattr(logging, log_level.upper(), logging.INFO)
     logger.setLevel(level)
     for h in logger.handlers:
@@ -117,7 +123,7 @@ def main(data_dir: str = '.', *, return_datasets: bool = False,
                 use_lf_only = True
         if use_lf_only or ds_hf is None:
             try:
-                fit = process_lf_only(ds_lf)
+                fit = process_lf_only(ds_lf, use_theory_guess=use_theory_guess)
             except Exception as e:
                 logger.error("Ошибка обработки %s: %s", key, e)
             else:
@@ -127,7 +133,7 @@ def main(data_dir: str = '.', *, return_datasets: bool = False,
                     triples.append((ds_lf, ds_hf))
         else:
             try:
-                fit = process_pair(ds_lf, ds_hf)
+                fit = process_pair(ds_lf, ds_hf, use_theory_guess=use_theory_guess)
             except Exception as e:
                 logger.error("Ошибка обработки %s: %s", key, e)
             else:
@@ -136,7 +142,7 @@ def main(data_dir: str = '.', *, return_datasets: bool = False,
                     triples.append((ds_lf, ds_hf))
     logger.info("Успешно аппроксимировано пар: %d", success_count)
     if do_plot and success_count:
-        visualize_stacked(triples)
+        visualize_stacked(triples, use_theory_guess=use_theory_guess)
     out_excel = Path(excel_path) if excel_path else None
     if success_count:
         export_freq_tables(triples, root, outfile=out_excel)
@@ -144,11 +150,16 @@ def main(data_dir: str = '.', *, return_datasets: bool = False,
     return triples if return_datasets else None
 
 
-def demo(data_dir: str | Path = "."):
-    triples = main(data_dir, return_datasets=True, do_plot=False)
+def demo(data_dir: str | Path = ".", *, use_theory_guess: bool = False):
+    triples = main(
+        data_dir,
+        return_datasets=True,
+        do_plot=False,
+        use_theory_guess=use_theory_guess,
+    )
     if not triples:
         raise RuntimeError("Не найдено корректных пар LF/HF")
-    visualize_stacked(triples)
+    visualize_stacked(triples, use_theory_guess=use_theory_guess)
     print("График открыт в браузере")
 
 
@@ -159,6 +170,11 @@ if __name__ == '__main__':
     parser.add_argument('--no-plot', action='store_true')
     parser.add_argument('--excel', help='путь к выходному xlsx')
     parser.add_argument('--log-level', default='DEBUG', help='уровень логирования')
+    parser.add_argument(
+        '--use-theory-guess',
+        action='store_true',
+        help='использовать теоретические значения в качестве первого приближения',
+    )
     args = parser.parse_args()
     main(args.data_dir, do_plot=not args.no_plot, excel_path=args.excel,
-         log_level=args.log_level)
+         log_level=args.log_level, use_theory_guess=args.use_theory_guess)
