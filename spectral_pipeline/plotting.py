@@ -51,8 +51,11 @@ def _load_guess_curves(
 
 
 def visualize_stacked(
-    triples: List[Tuple[DataSet, DataSet]], *, title: str | None = None,
-    outfile: str | None = None
+    triples: List[Tuple[DataSet, DataSet]],
+    *,
+    title: str | None = None,
+    outfile: str | None = None,
+    use_theory_guess: bool = True,
 ) -> None:
     """Рисует все LF/HF сигналы и их аппроксимации с вертикальными смещениями
     и добавляет сводные графики спектров и частот.
@@ -137,6 +140,7 @@ def visualize_stacked(
             first_ds.field_mT,
             first_ds.temp_K,
         )
+    theory_label_suffix = "" if use_theory_guess else " (plot only)"
 
     specs = [
         [
@@ -485,7 +489,7 @@ def visualize_stacked(
                     y=lf_th,
                     mode="lines",
                     line=dict(color="red"),
-                    name="LF theory",
+                    name=f"LF theory{theory_label_suffix}",
                 ),
                 row=1,
                 col=col_idx,
@@ -496,7 +500,7 @@ def visualize_stacked(
                     y=hf_th,
                     mode="lines",
                     line=dict(color="blue"),
-                    name="HF theory",
+                    name=f"HF theory{theory_label_suffix}",
                 ),
                 row=1,
                 col=col_idx,
@@ -510,7 +514,7 @@ def visualize_stacked(
                         y=tau_lf,
                         mode="lines",
                         line=dict(color="red"),
-                        name="tau_LF theory",
+                        name=f"tau_LF theory{theory_label_suffix}",
                     ),
                     row=2,
                     col=col_idx,
@@ -521,7 +525,7 @@ def visualize_stacked(
                         y=tau_hf,
                         mode="lines",
                         line=dict(color="blue"),
-                        name="tau_HF theory",
+                        name=f"tau_HF theory{theory_label_suffix}",
                     ),
                     row=2,
                     col=col_idx,
@@ -760,8 +764,11 @@ def visualize_stacked(
 
 
 def visualize_without_spectra(
-    triples: List[Tuple[DataSet, DataSet]], *, title: str | None = None,
-    outfile: str | None = None
+    triples: List[Tuple[DataSet, DataSet]],
+    *,
+    title: str | None = None,
+    outfile: str | None = None,
+    use_theory_guess: bool = True,
 ) -> None:
     """Визуализация без спектров с ошибками частот.
 
@@ -846,6 +853,7 @@ def visualize_without_spectra(
             first_ds.field_mT,
             first_ds.temp_K,
         )
+    theory_label_suffix = "" if use_theory_guess else " (plot only)"
 
     specs = [[{"type": "xy", "rowspan": 2}, {"type": "xy", "rowspan": 2}, {"type": "xy"}], [None, None, None]]
 
@@ -1080,7 +1088,7 @@ def visualize_without_spectra(
                     y=lf_th,
                     mode="lines",
                     line=dict(color="red"),
-                    name="LF theory",
+                    name=f"LF theory{theory_label_suffix}",
                 ),
                 row=1,
                 col=col_idx,
@@ -1091,7 +1099,7 @@ def visualize_without_spectra(
                     y=hf_th,
                     mode="lines",
                     line=dict(color="blue"),
-                    name="HF theory",
+                    name=f"HF theory{theory_label_suffix}",
                 ),
                 row=1,
                 col=col_idx,

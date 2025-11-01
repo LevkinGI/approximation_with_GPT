@@ -762,7 +762,12 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     ), cost
 
 
-def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
+def process_pair(
+    ds_lf: DataSet,
+    ds_hf: DataSet,
+    *,
+    use_theory_guess: bool = True,
+) -> Optional[FittingResult]:
     logger.info("Обработка пары T=%d K, H=%d mT", ds_lf.temp_K, ds_lf.field_mT)
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
@@ -841,7 +846,7 @@ def process_pair(ds_lf: DataSet, ds_hf: DataSet) -> Optional[FittingResult]:
         return lf_c, hf_c, None
 
     guess = None
-    if ds_lf.root:
+    if use_theory_guess and ds_lf.root:
         guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
 
     if guess is not None:
@@ -1270,7 +1275,11 @@ def fit_single(ds: DataSet,
     )
 
 
-def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
+def process_lf_only(
+    ds_lf: DataSet,
+    *,
+    use_theory_guess: bool = True,
+) -> Optional[FittingResult]:
     logger.info(
         "LF-only обработка пары T=%d K, H=%d mT",
         ds_lf.temp_K,
@@ -1372,7 +1381,7 @@ def process_lf_only(ds_lf: DataSet) -> Optional[FittingResult]:
         return lf_c, hf_c, None
 
     guess = None
-    if ds_lf.root:
+    if use_theory_guess and ds_lf.root:
         guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
 
     if guess is not None:
