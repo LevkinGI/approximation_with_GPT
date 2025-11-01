@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Tuple
 from pathlib import Path
 import numpy as np
@@ -11,9 +12,19 @@ from .fit import _core_signal
 
 
 
-def _load_guess_curves(directory: Path, field_mT: int, temp_K: int
-                        ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    """Return theoretical frequency curves if guess file exists."""
+@dataclass(slots=True)
+class TheoryCurves:
+    axis: np.ndarray
+    freq_hf: np.ndarray
+    freq_lf: np.ndarray
+    tau_hf: np.ndarray | None = None
+    tau_lf: np.ndarray | None = None
+
+
+def _load_guess_curves(
+    directory: Path, field_mT: int, temp_K: int
+) -> TheoryCurves | None:
+    """Return theoretical curves (frequency and, if present, decay)."""
     path_H = directory / f"H_{field_mT}.npy"
     path_T = directory / f"T_{temp_K}.npy"
     if path_H.exists():
@@ -27,12 +38,16 @@ def _load_guess_curves(directory: Path, field_mT: int, temp_K: int
     except Exception as exc:
         logger.warning("Не удалось загрузить %s: %s", path, exc)
         return None
-    if arr.shape[0] < 3:
+    if arr.ndim != 2 or arr.shape[0] < 3:
         return None
     axis = arr[0]
     hf = arr[1]
     lf = arr[2]
-    return axis, hf, lf
+    tau_hf = tau_lf = None
+    if arr.shape[0] >= 5:
+        tau_hf = arr[3]
+        tau_lf = arr[4]
+    return TheoryCurves(axis=axis, freq_hf=hf, freq_lf=lf, tau_hf=tau_hf, tau_lf=tau_lf)
 
 
 def visualize_stacked(
@@ -88,6 +103,8 @@ def visualize_stacked(
 
     freq_vs_H: dict[int, list[tuple[int, float, float]]] = {}
     freq_vs_T: dict[int, list[tuple[int, float, float]]] = {}
+    tau_vs_H: dict[int, list[tuple[int, float, float]]] = {}
+    tau_vs_T: dict[int, list[tuple[int, float, float]]] = {}
     amp_vs_H: dict[int, list[tuple[int, float, float]]] = {}
     amp_vs_T: dict[int, list[tuple[int, float, float]]] = {}
     for ds_lf, ds_hf in triples_sorted:
@@ -95,13 +112,19 @@ def visualize_stacked(
             continue
         H, T = ds_lf.field_mT, ds_lf.temp_K
         f1, f2 = sorted((ds_lf.fit.f1 / GHZ, ds_lf.fit.f2 / GHZ))
+        tau1 = (1.0 / ds_lf.fit.zeta1) / NS
+        tau2 = (1.0 / ds_lf.fit.zeta2) / NS
         freq_vs_H.setdefault(T, []).append((H, f1, f2))
         freq_vs_T.setdefault(H, []).append((T, f1, f2))
+        tau_vs_H.setdefault(T, []).append((H, tau1, tau2))
+        tau_vs_T.setdefault(H, []).append((T, tau1, tau2))
         amp_vs_H.setdefault(T, []).append((H, ds_lf.fit.A1, ds_lf.fit.A2))
         amp_vs_T.setdefault(H, []).append((T, ds_lf.fit.A1, ds_lf.fit.A2))
 
     freq_vs_H = {T: sorted(v) for T, v in freq_vs_H.items() if len(v) >= 2}
     freq_vs_T = {H: sorted(v) for H, v in freq_vs_T.items() if len(v) >= 2}
+    tau_vs_H = {T: sorted(v) for T, v in tau_vs_H.items() if len(v) >= 2}
+    tau_vs_T = {H: sorted(v) for H, v in tau_vs_T.items() if len(v) >= 2}
     amp_vs_H = {T: sorted(v) for T, v in amp_vs_H.items() if len(v) >= 2}
     amp_vs_T = {H: sorted(v) for H, v in amp_vs_T.items() if len(v) >= 2}
 
@@ -117,11 +140,12 @@ def visualize_stacked(
 
     specs = [
         [
-            {"type": "xy", "rowspan": 2},
-            {"type": "xy", "rowspan": 2},
-            {"type": "xy", "rowspan": 2},
+            {"type": "xy", "rowspan": 3},
+            {"type": "xy", "rowspan": 3},
+            {"type": "xy", "rowspan": 3},
             {"type": "xy"},
         ],
+        [None, None, None, {"type": "xy"}],
         [None, None, None, {"type": "xy"}],
     ]
 
@@ -132,6 +156,7 @@ def visualize_stacked(
             f"HF signals (H = {fixed_H} mT)",
             f"Spectra (H = {fixed_H} mT)",
             f"Frequencies (H = {fixed_H} mT)",
+            f"Decay time (H = {fixed_H} mT)",
             f"Amplitudes (H = {fixed_H} mT)",
         ]
     else:  # varying == "H"
@@ -141,16 +166,17 @@ def visualize_stacked(
             f"HF signals (T = {fixed_T} K)",
             f"Spectra (T = {fixed_T} K)",
             f"Frequencies (T = {fixed_T} K)",
+            f"Decay time (T = {fixed_T} K)",
             f"Amplitudes (T = {fixed_T} K)",
         ]
 
     fig = make_subplots(
-        rows=2,
+        rows=3,
         cols=4,
         specs=specs,
         column_widths=[0.26, 0.26, 0.26, 0.22],
         horizontal_spacing=0.06,
-        vertical_spacing=0.15,
+        vertical_spacing=0.1,
         subplot_titles=tuple(titles),
     )
 
@@ -301,6 +327,33 @@ def visualize_stacked(
                 col=4,
             )
         fig.update_xaxes(title_text="Temperature (K)", row=1, col=4)
+        for H_fix, pts in tau_vs_T.items():
+            T_vals, tau_LF, tau_HF = zip(*pts)
+            fig.add_trace(
+                go.Scatter(
+                    x=T_vals,
+                    y=tau_LF,
+                    mode="markers",
+                    line=dict(width=2, color="red"),
+                    marker=dict(size=9, color="red"),
+                    name=f"tau_LF, H = {H_fix} mT",
+                ),
+                row=2,
+                col=4,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=T_vals,
+                    y=tau_HF,
+                    mode="markers",
+                    line=dict(width=2, color="blue"),
+                    marker=dict(size=9, color="blue"),
+                    name=f"tau_HF, H = {H_fix} mT",
+                ),
+                row=2,
+                col=4,
+            )
+        fig.update_xaxes(title_text="Temperature (K)", row=2, col=4)
         for H_fix, pts in amp_vs_T.items():
             T_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
@@ -312,7 +365,7 @@ def visualize_stacked(
                     marker=dict(size=9, color="red"),
                     name=f"A_LF, H = {H_fix} mT",
                 ),
-                row=2,
+                row=3,
                 col=4,
             )
             fig.add_trace(
@@ -324,10 +377,10 @@ def visualize_stacked(
                     marker=dict(size=9, color="blue"),
                     name=f"A_HF, H = {H_fix} mT",
                 ),
-                row=2,
+                row=3,
                 col=4,
             )
-        fig.update_xaxes(title_text="Temperature (K)", row=2, col=4)
+        fig.update_xaxes(title_text="Temperature (K)", row=3, col=4)
     else:
         for T_fix, pts in freq_vs_H.items():
             H_vals, fLF, fHF = zip(*pts)
@@ -356,6 +409,33 @@ def visualize_stacked(
                 col=4,
             )
         fig.update_xaxes(title_text="Magnetic field (mT)", row=1, col=4)
+        for T_fix, pts in tau_vs_H.items():
+            H_vals, tau_LF, tau_HF = zip(*pts)
+            fig.add_trace(
+                go.Scatter(
+                    x=H_vals,
+                    y=tau_LF,
+                    mode="markers",
+                    line=dict(width=2, color="red"),
+                    marker=dict(size=9, color="red"),
+                    name=f"tau_LF, T = {T_fix} K",
+                ),
+                row=2,
+                col=4,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=H_vals,
+                    y=tau_HF,
+                    mode="markers",
+                    line=dict(width=2, color="blue"),
+                    marker=dict(size=9, color="blue"),
+                    name=f"tau_HF, T = {T_fix} K",
+                ),
+                row=2,
+                col=4,
+            )
+        fig.update_xaxes(title_text="Magnetic field (mT)", row=2, col=4)
         for T_fix, pts in amp_vs_H.items():
             H_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
@@ -367,7 +447,7 @@ def visualize_stacked(
                     marker=dict(size=9, color="red"),
                     name=f"A_LF, T = {T_fix} K",
                 ),
-                row=2,
+                row=3,
                 col=4,
             )
             fig.add_trace(
@@ -379,44 +459,73 @@ def visualize_stacked(
                     marker=dict(size=9, color="blue"),
                     name=f"A_HF, T = {T_fix} K",
                 ),
-                row=2,
+                row=3,
                 col=4,
             )
-        fig.update_xaxes(title_text="Magnetic field (mT)", row=2, col=4)
+        fig.update_xaxes(title_text="Magnetic field (mT)", row=3, col=4)
     fig.update_yaxes(title_text="Frequency (GHz)", row=1, col=4)
-    fig.update_yaxes(title_text="Amplitude", row=2, col=4)
+    fig.update_yaxes(title_text="Decay time (ns)", row=2, col=4)
+    fig.update_yaxes(title_text="Amplitude", row=3, col=4)
 
     if theory_curves is not None:
-        axis, hf_th, lf_th = theory_curves
+        axis = theory_curves.axis
+        hf_th = theory_curves.freq_hf
+        lf_th = theory_curves.freq_lf
         var_vals = [key_func(ds_lf) for ds_lf, _ in triples_sorted]
         lo, hi = min(var_vals), max(var_vals)
         mask = (axis >= lo) & (axis <= hi)
         axis = axis[mask]
         hf_th = hf_th[mask]
         lf_th = lf_th[mask]
-        col_idx = 4
-        fig.add_trace(
-            go.Scatter(
-                x=axis,
-                y=lf_th,
-                mode="lines",
-                line=dict(color="red"),
-                name="LF theory",
-            ),
-            row=1,
-            col=col_idx,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=axis,
-                y=hf_th,
-                mode="lines",
-                line=dict(color="blue"),
-                name="HF theory",
-            ),
-            row=1,
-            col=col_idx,
-        )
+        if axis.size:
+            col_idx = 4
+            fig.add_trace(
+                go.Scatter(
+                    x=axis,
+                    y=lf_th,
+                    mode="lines",
+                    line=dict(color="red"),
+                    name="LF theory",
+                ),
+                row=1,
+                col=col_idx,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=axis,
+                    y=hf_th,
+                    mode="lines",
+                    line=dict(color="blue"),
+                    name="HF theory",
+                ),
+                row=1,
+                col=col_idx,
+            )
+            if theory_curves.tau_lf is not None and theory_curves.tau_hf is not None:
+                tau_lf = theory_curves.tau_lf[mask]
+                tau_hf = theory_curves.tau_hf[mask]
+                fig.add_trace(
+                    go.Scatter(
+                        x=axis,
+                        y=tau_lf,
+                        mode="lines",
+                        line=dict(color="red"),
+                        name="tau_LF theory",
+                    ),
+                    row=2,
+                    col=col_idx,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=axis,
+                        y=tau_hf,
+                        mode="lines",
+                        line=dict(color="blue"),
+                        name="tau_HF theory",
+                    ),
+                    row=2,
+                    col=col_idx,
+                )
 
     spectra_HF: list[tuple[np.ndarray, np.ndarray, str]] = []
     spectra_LF: list[tuple[np.ndarray, np.ndarray, str]] = []
@@ -514,7 +623,7 @@ def visualize_stacked(
         hovermode="x unified",
         font=dict(size=16),
         width=2000,
-        height=1000,
+        height=1200,
         paper_bgcolor="white",
         plot_bgcolor="white",
     )
@@ -616,30 +725,29 @@ def visualize_stacked(
         row=1,
         col=4,
     )
-    fig.update_xaxes(
-        showline=True,
-        linewidth=1,
-        linecolor="black",
-        mirror=True,
-        showgrid=True,
-        gridcolor="#cccccc",
-        gridwidth=1,
-        row=2,
-        col=4,
-    )
-    fig.update_yaxes(
-        showline=True,
-        linewidth=1,
-        linecolor="black",
-        mirror=True,
-        showgrid=True,
-        gridcolor="#cccccc",
-        gridwidth=1,
-        row=2,
-        col=4,
-        range=[0, None],
-    )
-
+    for r in (2, 3):
+        fig.update_xaxes(
+            showline=True,
+            linewidth=1,
+            linecolor="black",
+            mirror=True,
+            showgrid=True,
+            gridcolor="#cccccc",
+            gridwidth=1,
+            row=r,
+            col=4,
+        )
+        fig.update_yaxes(
+            showline=True,
+            linewidth=1,
+            linecolor="black",
+            mirror=True,
+            showgrid=True,
+            gridcolor="#cccccc",
+            gridwidth=1,
+            row=r,
+            col=4,
+        )
     fig.update_xaxes(title_font=dict(size=28), tickfont=dict(size=24))
     fig.update_yaxes(title_font=dict(size=28), tickfont=dict(size=24))
 
@@ -955,36 +1063,39 @@ def visualize_without_spectra(
     fig.update_yaxes(title_text="Frequency (GHz)", row=1, col=3)
 
     if theory_curves is not None:
-        axis, hf_th, lf_th = theory_curves
+        axis = theory_curves.axis
+        hf_th = theory_curves.freq_hf
+        lf_th = theory_curves.freq_lf
         var_vals = [key_func(ds_lf) for ds_lf, _ in triples_sorted]
         lo, hi = min(var_vals), max(var_vals)
         mask = (axis >= lo) & (axis <= hi)
         axis = axis[mask]
         hf_th = hf_th[mask]
         lf_th = lf_th[mask]
-        col_idx = 3
-        fig.add_trace(
-            go.Scatter(
-                x=axis,
-                y=lf_th,
-                mode="lines",
-                line=dict(color="red"),
-                name="LF theory",
-            ),
-            row=1,
-            col=col_idx,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=axis,
-                y=hf_th,
-                mode="lines",
-                line=dict(color="blue"),
-                name="HF theory",
-            ),
-            row=1,
-            col=col_idx,
-        )
+        if axis.size:
+            col_idx = 3
+            fig.add_trace(
+                go.Scatter(
+                    x=axis,
+                    y=lf_th,
+                    mode="lines",
+                    line=dict(color="red"),
+                    name="LF theory",
+                ),
+                row=1,
+                col=col_idx,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=axis,
+                    y=hf_th,
+                    mode="lines",
+                    line=dict(color="blue"),
+                    name="HF theory",
+                ),
+                row=1,
+                col=col_idx,
+            )
 
     fig.update_layout(
         showlegend=False,
