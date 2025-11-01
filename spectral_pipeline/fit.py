@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Iterable, Tuple, List, Optional
+from dataclasses import replace
 from collections.abc import Iterable as IterableABC
 from pathlib import Path
 import math
@@ -578,6 +579,54 @@ def _core_signal(t: NDArray, A1, A2, tau1, tau2, f1, f2, phi1, phi2) -> NDArray:
     )
 
 
+def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
+    if t.size == 0:
+        return np.ones_like(t)
+    t_min = float(t.min())
+    t_len = float(t.max() - t_min)
+    if t_len <= 0:
+        return np.ones_like(t)
+    borders = t_min + np.array([1, 2]) * t_len / 3
+    w = np.ones_like(t)
+    w[t >= borders[0]] = 0.8
+    w[t >= borders[1]] = 0.5
+    return w
+
+
+def _normalized_fit_error(
+    ds_lf: DataSet,
+    fit: FittingResult,
+    ds_hf: DataSet | None = None,
+) -> float:
+    def _safe_tau(zeta: float) -> float:
+        if not np.isfinite(zeta) or zeta == 0.0:
+            return float("inf")
+        return 1.0 / zeta
+
+    tau1 = _safe_tau(fit.zeta1)
+    tau2 = _safe_tau(fit.zeta2)
+
+    t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
+    w_lf = _piecewise_time_weights(t_lf)
+    core_lf = _core_signal(t_lf, fit.A1, fit.A2, tau1, tau2, fit.f1, fit.f2, fit.phi1, fit.phi2)
+    err_lf = w_lf * (fit.k_lf * core_lf + fit.C_lf - y_lf)
+    mse_lf = float(np.mean(err_lf ** 2)) if err_lf.size else 0.0
+    weight_sum = float(y_lf.size)
+    weighted_error = mse_lf * weight_sum
+
+    if ds_hf is not None and np.isfinite(fit.k_hf) and np.isfinite(fit.C_hf):
+        t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
+        core_hf = _core_signal(t_hf, fit.A1, fit.A2, tau1, tau2, fit.f1, fit.f2, fit.phi1, fit.phi2)
+        err_hf = fit.k_hf * core_hf + fit.C_hf - y_hf
+        mse_hf = float(np.mean(err_hf ** 2)) if err_hf.size else 0.0
+        weight_sum += float(y_hf.size)
+        weighted_error += mse_hf * float(y_hf.size)
+
+    if weight_sum == 0:
+        return float("inf")
+    return weighted_error / weight_sum
+
+
 def _single_sine_refine(t: NDArray, y: NDArray, f0: float
                         ) -> tuple[float, float, float, float]:
     A0 = 0.5 * (y.max() - y.min())
@@ -599,19 +648,6 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
              freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
-
-    def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
-        if t.size == 0:
-            return np.ones_like(t)
-        t_min = t.min()
-        t_len = t.max() - t_min
-        if t_len <= 0:
-            return np.ones_like(t)
-        borders = t_min + np.array([1, 2]) * t_len / 3
-        w = np.ones_like(t)
-        w[t >= borders[0]] = 0.8
-        w[t >= borders[1]] = 0.5
-        return w
 
     w_lf = _piecewise_time_weights(t_lf)
 
@@ -1097,46 +1133,80 @@ def process_pair(
             f2_err=best_fit.f1_err,
             cost=best_fit.cost,
         )
-    if best_fit.cost is not None and best_fit.cost > MAX_COST:
+    pair_cost = best_fit.cost
+    pair_valid = not (pair_cost is not None and pair_cost > MAX_COST)
+    if not pair_valid:
+        cost_for_log = pair_cost if pair_cost is not None else float("nan")
         logger.warning(
             "(%d, %d): аппроксимация отклонена f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
             ds_lf.temp_K,
             ds_lf.field_mT,
             best_fit.f1 / GHZ,
             best_fit.f2 / GHZ,
-            best_fit.cost,
+            cost_for_log,
         )
-        ds_lf.fit = ds_hf.fit = None
-        return None
+
+    pair_quality = _normalized_fit_error(ds_lf, best_fit, ds_hf) if pair_valid else math.inf
+
+    single_fit: Optional[FittingResult] = None
+    single_quality = math.inf
+    try:
+        ds_lf_single = replace(ds_lf, fit=None)
+        single_fit = process_lf_only(
+            ds_lf_single,
+            use_theory_guess=use_theory_guess,
+            precomputed_guess=guess,
+            skip_guess_lookup=True,
+        )
+    except Exception as exc:
+        logger.debug(
+            "(%d, %d): LF-only сравнение не выполнено: %s",
+            ds_lf.temp_K,
+            ds_lf.field_mT,
+            exc,
+        )
+        single_fit = None
     else:
+        if single_fit is not None:
+            single_quality = _normalized_fit_error(ds_lf_single, single_fit)
+            if not np.isfinite(single_quality):
+                single_fit = None
+                single_quality = math.inf
+
+    if pair_valid and (single_fit is None or single_quality >= pair_quality):
         ds_lf.fit = ds_hf.fit = best_fit
+        cost_for_log = pair_cost if pair_cost is not None else float("nan")
         logger.info(
-            "(%d, %d): аппроксимация успешна f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
+            "(%d, %d): выбрана совместная аппроксимация f1=%.3f ГГц, f2=%.3f ГГц, score=%.3e, cost=%.3e",
             ds_lf.temp_K,
             ds_lf.field_mT,
             best_fit.f1 / GHZ,
             best_fit.f2 / GHZ,
-            best_fit.cost,
+            pair_quality,
+            cost_for_log,
         )
         return best_fit
+
+    if single_fit is not None:
+        ds_lf.fit = single_fit
+        ds_hf.fit = None
+        logger.info(
+            "(%d, %d): выбрана LF-only аппроксимация f1=%.3f ГГц, f2=%.3f ГГц, score=%.3e",
+            ds_lf.temp_K,
+            ds_lf.field_mT,
+            single_fit.f1 / GHZ,
+            single_fit.f2 / GHZ,
+            single_quality,
+        )
+        return single_fit
+
+    ds_lf.fit = ds_hf.fit = None
+    return None
 
 
 def fit_single(ds: DataSet,
                freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
     t, y = ds.ts.t, ds.ts.s
-
-    def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
-        if t.size == 0:
-            return np.ones_like(t)
-        t_min = t.min()
-        t_len = t.max() - t_min
-        if t_len <= 0:
-            return np.ones_like(t)
-        borders = t_min + np.array([1, 2]) * t_len / 3
-        w = np.ones_like(t)
-        w[t >= borders[0]] = 0.8
-        w[t >= borders[1]] = 0.5
-        return w
 
     w = _piecewise_time_weights(t)
 
@@ -1212,7 +1282,11 @@ def fit_single(ds: DataSet,
     def residuals(p):
         (k, C, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_) = p
         core = _core_signal(t, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        return w * (k * core + C - y)
+        res = w * (k * core + C - y)
+        n = y.size
+        if n:
+            res = res / math.sqrt(n)
+        return res
 
     sol = least_squares(
         residuals,
@@ -1279,6 +1353,8 @@ def process_lf_only(
     ds_lf: DataSet,
     *,
     use_theory_guess: bool = True,
+    precomputed_guess: tuple[float, float] | None = None,
+    skip_guess_lookup: bool = False,
 ) -> Optional[FittingResult]:
     logger.info(
         "LF-only обработка пары T=%d K, H=%d mT",
@@ -1380,8 +1456,13 @@ def process_lf_only(
             lf_c = [(f1_fallback, None)]
         return lf_c, hf_c, None
 
-    guess = None
-    if use_theory_guess and ds_lf.root:
+    guess = precomputed_guess
+    if (
+        guess is None
+        and use_theory_guess
+        and ds_lf.root
+        and not skip_guess_lookup
+    ):
         guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
 
     if guess is not None:
