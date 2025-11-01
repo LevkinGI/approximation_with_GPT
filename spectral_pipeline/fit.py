@@ -497,6 +497,16 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         core_hf = _core_signal(t_hf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
         res_lf = w_lf * (k_lf * core_lf + C_lf - y_lf)
         res_hf = k_hf * core_hf + C_hf - y_hf
+
+        # Normalize channel residuals so that the sum of squares corresponds to
+        # the mean squared error for each channel individually.
+        n_lf = y_lf.size
+        n_hf = y_hf.size
+        if n_lf:
+            res_lf = res_lf / math.sqrt(n_lf)
+        if n_hf:
+            res_hf = res_hf / math.sqrt(n_hf)
+
         return np.concatenate([res_lf, res_hf])
 
     sol = least_squares(
