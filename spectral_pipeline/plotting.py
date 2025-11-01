@@ -78,7 +78,7 @@ def visualize_stacked(
                 y_fit = (
                     p.k_lf * core + p.C_lf
                     if ds.tag == "LF"
-                    else p.k_hf * core + p.C_hf
+                    else core + p.C_hf
                 )
                 ranges.append(np.ptp(y_fit[mask]))
             else:
@@ -240,7 +240,7 @@ def visualize_stacked(
                 p.phi1,
                 p.phi2,
             )
-            y_fit = p.k_hf * core + shift
+            y_fit = core + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_hf.ts.t / NS,
@@ -703,7 +703,7 @@ def visualize_without_spectra(
                 y_fit = (
                     p.k_lf * core + p.C_lf
                     if ds.tag == "LF"
-                    else p.k_hf * core + p.C_hf
+                    else core + p.C_hf
                 )
                 ranges.append(np.ptp(y_fit[mask]))
             else:
@@ -855,7 +855,7 @@ def visualize_without_spectra(
                 p.phi1,
                 p.phi2,
             )
-            y_fit = p.k_hf * core + shift
+            y_fit = core + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_hf.ts.t / NS,

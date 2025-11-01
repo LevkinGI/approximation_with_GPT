@@ -41,7 +41,6 @@ def test_no_debug_when_freqs_within_bounds(monkeypatch, tmp_path, caplog):
             A1=1.0,
             A2=1.0,
             k_lf=1.0,
-            k_hf=1.0,
             C_lf=0.0,
             C_hf=0.0,
             cost=1.0,
