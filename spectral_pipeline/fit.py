@@ -766,7 +766,7 @@ def process_pair(
     ds_lf: DataSet,
     ds_hf: DataSet,
     *,
-    use_theory_guess: bool = False,
+    use_theory_guess: bool = True,
 ) -> Optional[FittingResult]:
     logger.info("Обработка пары T=%d K, H=%d mT", ds_lf.temp_K, ds_lf.field_mT)
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
@@ -1278,7 +1278,7 @@ def fit_single(ds: DataSet,
 def process_lf_only(
     ds_lf: DataSet,
     *,
-    use_theory_guess: bool = False,
+    use_theory_guess: bool = True,
 ) -> Optional[FittingResult]:
     logger.info(
         "LF-only обработка пары T=%d K, H=%d mT",

@@ -88,7 +88,7 @@ def main(
     do_plot: bool = True,
     excel_path: str | None = None,
     log_level: str = "DEBUG",
-    use_theory_guess: bool = False,
+    use_theory_guess: bool = True,
 ):
     level = getattr(logging, log_level.upper(), logging.INFO)
     logger.setLevel(level)
@@ -150,7 +150,7 @@ def main(
     return triples if return_datasets else None
 
 
-def demo(data_dir: str | Path = ".", *, use_theory_guess: bool = False):
+def demo(data_dir: str | Path = ".", *, use_theory_guess: bool = True):
     triples = main(
         data_dir,
         return_datasets=True,
@@ -172,9 +172,17 @@ if __name__ == '__main__':
     parser.add_argument('--log-level', default='DEBUG', help='уровень логирования')
     parser.add_argument(
         '--use-theory-guess',
+        dest='use_theory_guess',
         action='store_true',
         help='использовать теоретические значения в качестве первого приближения',
     )
+    parser.add_argument(
+        '--no-use-theory-guess',
+        dest='use_theory_guess',
+        action='store_false',
+        help='не использовать теоретические значения при подборе',
+    )
+    parser.set_defaults(use_theory_guess=True)
     args = parser.parse_args()
     main(args.data_dir, do_plot=not args.no_plot, excel_path=args.excel,
          log_level=args.log_level, use_theory_guess=args.use_theory_guess)

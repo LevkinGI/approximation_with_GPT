@@ -110,10 +110,15 @@ def test_process_pair_uses_guess_flag(monkeypatch, tmp_path):
     monkeypatch.setattr(fit, "fit_pair", fake_fit_pair)
 
     fit.process_pair(lf, hf)
-    assert guess_calls["count"] == 0
+    assert guess_calls["count"] == 1
 
     lf2 = _make_ds("LF", tmp_path)
     hf2 = _make_ds("HF", tmp_path)
-    fit.process_pair(lf2, hf2, use_theory_guess=True)
+    fit.process_pair(lf2, hf2, use_theory_guess=False)
     assert guess_calls["count"] == 1
+
+    lf3 = _make_ds("LF", tmp_path)
+    hf3 = _make_ds("HF", tmp_path)
+    fit.process_pair(lf3, hf3, use_theory_guess=True)
+    assert guess_calls["count"] == 2
 

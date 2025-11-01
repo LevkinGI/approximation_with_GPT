@@ -55,7 +55,7 @@ def visualize_stacked(
     *,
     title: str | None = None,
     outfile: str | None = None,
-    use_theory_guess: bool = False,
+    use_theory_guess: bool = True,
 ) -> None:
     """Рисует все LF/HF сигналы и их аппроксимации с вертикальными смещениями
     и добавляет сводные графики спектров и частот.
@@ -768,7 +768,7 @@ def visualize_without_spectra(
     *,
     title: str | None = None,
     outfile: str | None = None,
-    use_theory_guess: bool = False,
+    use_theory_guess: bool = True,
 ) -> None:
     """Визуализация без спектров с ошибками частот.
 
