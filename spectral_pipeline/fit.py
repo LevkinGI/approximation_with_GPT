@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Iterable, Tuple, List, Optional
+from dataclasses import replace
 from collections.abc import Iterable as IterableABC
 from pathlib import Path
 import math
@@ -15,6 +16,44 @@ except ImportError:  # pragma: no cover - handled at runtime
     pywt = None  # type: ignore[assignment]
 
 from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
+
+
+def _clamp_frequency(freq: float, band: tuple[float, float]) -> float:
+    """Clamp ``freq`` into ``band`` while handling non-finite inputs."""
+
+    lo, hi = band
+    if not np.isfinite(freq):
+        return float((lo + hi) * 0.5)
+    return float(min(max(freq, lo), hi))
+
+
+def _sanitize_bounds(
+    lo: float,
+    hi: float,
+    band: tuple[float, float],
+    *,
+    min_width: float = 0.5 * GHZ,
+) -> tuple[float, float]:
+    """Ensure bounds are finite, respect ``band`` and keep a positive width."""
+
+    band_lo, band_hi = band
+    if not np.isfinite(lo) or not np.isfinite(hi):
+        lo, hi = band_lo, band_hi
+    lo = max(band_lo, min(lo, band_hi))
+    hi = max(band_lo, min(hi, band_hi))
+
+    if hi - lo < min_width:
+        center = (lo + hi) * 0.5
+        if not np.isfinite(center):
+            center = (band_lo + band_hi) * 0.5
+        half = min_width * 0.5
+        lo = max(band_lo, center - half)
+        hi = min(band_hi, center + half)
+        if hi <= lo:
+            hi = min(band_hi, max(lo + min_width, band_lo + min_width))
+            lo = max(band_lo, hi - min_width)
+
+    return lo, hi
 
 
 def _cwt_gaussian_candidates(
@@ -578,13 +617,63 @@ def _core_signal(t: NDArray, A1, A2, tau1, tau2, f1, f2, phi1, phi2) -> NDArray:
     )
 
 
+def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
+    if t.size == 0:
+        return np.ones_like(t)
+    t_min = float(t.min())
+    t_len = float(t.max() - t_min)
+    if t_len <= 0:
+        return np.ones_like(t)
+    borders = t_min + np.array([1, 2]) * t_len / 3
+    w = np.ones_like(t)
+    w[t >= borders[0]] = 0.8
+    w[t >= borders[1]] = 0.5
+    return w
+
+
+def _normalized_fit_error(
+    ds_lf: DataSet,
+    fit: FittingResult,
+    ds_hf: DataSet | None = None,
+) -> float:
+    def _safe_tau(zeta: float) -> float:
+        if not np.isfinite(zeta) or zeta == 0.0:
+            return float("inf")
+        return 1.0 / zeta
+
+    tau1 = _safe_tau(fit.zeta1)
+    tau2 = _safe_tau(fit.zeta2)
+
+    t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
+    w_lf = _piecewise_time_weights(t_lf)
+    core_lf = _core_signal(t_lf, fit.A1, fit.A2, tau1, tau2, fit.f1, fit.f2, fit.phi1, fit.phi2)
+    err_lf = w_lf * (fit.k_lf * core_lf + fit.C_lf - y_lf)
+    mse_lf = float(np.mean(err_lf ** 2)) if err_lf.size else 0.0
+    weight_sum = float(y_lf.size)
+    weighted_error = mse_lf * weight_sum
+
+    if ds_hf is not None and np.isfinite(fit.k_hf) and np.isfinite(fit.C_hf):
+        t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
+        core_hf = _core_signal(t_hf, fit.A1, fit.A2, tau1, tau2, fit.f1, fit.f2, fit.phi1, fit.phi2)
+        err_hf = fit.k_hf * core_hf + fit.C_hf - y_hf
+        mse_hf = float(np.mean(err_hf ** 2)) if err_hf.size else 0.0
+        weight_sum += float(y_hf.size)
+        weighted_error += mse_hf * float(y_hf.size)
+
+    if weight_sum == 0:
+        return float("inf")
+    return weighted_error / weight_sum
+
+
 def _single_sine_refine(t: NDArray, y: NDArray, f0: float
                         ) -> tuple[float, float, float, float]:
+    band = (LF_BAND[0], HF_BAND[1])
+    f0 = _clamp_frequency(f0, band)
     A0 = 0.5 * (y.max() - y.min())
     tau0 = (t[-1] - t[0]) / 3
     p0 = [A0, f0, 0.0, tau0, y.mean()]
-    lo = np.array([0.0, LF_BAND[0], -np.pi, tau0/10, y.min() - abs(np.ptp(y))])
-    hi = np.array([3*A0, HF_BAND[1], np.pi, tau0*10, y.max() + abs(np.ptp(y))])
+    lo = np.array([0.0, band[0], -np.pi, tau0 / 10, y.min() - abs(np.ptp(y))])
+    hi = np.array([3 * A0, band[1], np.pi, tau0 * 10, y.max() + abs(np.ptp(y))])
 
     def model(p):
         A, f, phi, tau, C = p
@@ -600,23 +689,10 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
-    def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
-        if t.size == 0:
-            return np.ones_like(t)
-        t_min = t.min()
-        t_len = t.max() - t_min
-        if t_len <= 0:
-            return np.ones_like(t)
-        borders = t_min + np.array([1, 2]) * t_len / 3
-        w = np.ones_like(t)
-        w[t >= borders[0]] = 0.8
-        w[t >= borders[1]] = 0.5
-        return w
-
     w_lf = _piecewise_time_weights(t_lf)
 
-    f1_init = ds_lf.f1_init
-    f2_init = ds_hf.f2_init
+    f1_init = _clamp_frequency(ds_lf.f1_init, LF_BAND)
+    f2_init = _clamp_frequency(ds_hf.f2_init, HF_BAND)
     logger.debug(
         "Начальные оценки: f1=%.3f ГГц, f2=%.3f ГГц", f1_init/GHZ, f2_init/GHZ)
 
@@ -668,10 +744,14 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     ])
 
     if freq_bounds is None:
-        f1_lo, f1_hi = f1_init * 0.9, f1_init * 1.2
-        f2_lo, f2_hi = f2_init * 0.9, f2_init * 1.2
+        f1_lo, f1_hi = _sanitize_bounds(f1_init * 0.9, f1_init * 1.2, LF_BAND)
+        f2_lo, f2_hi = _sanitize_bounds(f2_init * 0.9, f2_init * 1.2, HF_BAND)
+        freq_bounds = ((f1_lo, f1_hi), (f2_lo, f2_hi))
     else:
-        (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
+        (f1_lo_raw, f1_hi_raw), (f2_lo_raw, f2_hi_raw) = freq_bounds
+        f1_lo, f1_hi = _sanitize_bounds(f1_lo_raw, f1_hi_raw, LF_BAND)
+        f2_lo, f2_hi = _sanitize_bounds(f2_lo_raw, f2_hi_raw, HF_BAND)
+        freq_bounds = ((f1_lo, f1_hi), (f2_lo, f2_hi))
 
     lo = np.array([
         0.5, 0.5,
@@ -818,12 +898,13 @@ def process_pair(
                     for f, z in zip(f_all[mask_hf], zeta_all[mask_hf])]
         else:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
-            range_hf = (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ) if f2_rough is not None else HF_BAND
+            raw_range = (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ) if f2_rough is not None else HF_BAND
+            range_hf = _sanitize_bounds(raw_range[0], raw_range[1], HF_BAND)
             logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
             f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_rough if f2_rough is not None else 0.0)
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
-            hf_c = [(f2_fallback, None)]
+            hf_c = [(_clamp_frequency(f2_fallback, HF_BAND), None)]
         mask_lf = (
             (zeta_all > 0)
             & (LF_BAND[0] <= f_all)
@@ -835,14 +916,15 @@ def process_pair(
             lf_c = _top2_nearest(f_all[mask_lf], zeta_all[mask_lf], f1_rough)
         else:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
-            range_lf = (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ) if f1_rough is not None else LF_BAND
+            raw_range = (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ) if f1_rough is not None else LF_BAND
+            range_lf = _sanitize_bounds(raw_range[0], raw_range[1], LF_BAND)
             logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
             f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
                                         range_lf, f1_rough if f1_rough is not None else 0.0,
                                         avoid=hf_c[0][0] if hf_c else None)
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
-            lf_c = [(f1_fallback, None)]
+            lf_c = [(_clamp_frequency(f1_fallback, LF_BAND), None)]
         return lf_c, hf_c, None
 
     guess = None
@@ -869,12 +951,13 @@ def process_pair(
         hf_cand = _top2_nearest(f_all[mask_hf], np.maximum(zeta_all[mask_hf], 0.0), f2_guess) if np.any(mask_hf) else []
         if not hf_cand:
             logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
-            range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
+            raw_range = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
+            range_hf = _sanitize_bounds(raw_range[0], raw_range[1], HF_BAND)
             logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
             f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_guess)
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
-            hf_cand = [(f2_fallback, None)]
+            hf_cand = [(_clamp_frequency(f2_fallback, HF_BAND), None)]
         mask_lf = (
             (zeta_all > 0)
             & (LF_BAND[0] <= f_all)
@@ -885,23 +968,29 @@ def process_pair(
         lf_cand = _top2_nearest(f_all[mask_lf], zeta_all[mask_lf], f1_guess) if np.any(mask_lf) else []
         if not lf_cand:
             logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
-            range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
+            raw_range = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
+            range_lf = _sanitize_bounds(raw_range[0], raw_range[1], LF_BAND)
             logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
             f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
                                         range_lf, f1_guess,
                                         avoid=hf_cand[0][0] if hf_cand else None)
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
-            lf_cand = [(f1_fallback, None)]
-        def _ensure_guess(cands, freq):
+            lf_cand = [(_clamp_frequency(f1_fallback, LF_BAND), None)]
+
+        def _ensure_guess(cands, freq, band):
+            freq = _clamp_frequency(freq, band)
             for f, _ in cands:
                 if abs(f - freq) < 20e6:
                     return
             cands.append((freq, None))
-        _ensure_guess(lf_cand, f1_guess)
-        _ensure_guess(hf_cand, f2_guess)
-        freq_bounds = ((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
-                       (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
+
+        _ensure_guess(lf_cand, f1_guess, LF_BAND)
+        _ensure_guess(hf_cand, f2_guess, HF_BAND)
+        freq_bounds = (
+            _sanitize_bounds(f1_guess - 5 * GHZ, f1_guess + 5 * GHZ, LF_BAND),
+            _sanitize_bounds(f2_guess - 5 * GHZ, f2_guess + 5 * GHZ, HF_BAND),
+        )
     else:
         logger.info("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
@@ -1097,51 +1186,85 @@ def process_pair(
             f2_err=best_fit.f1_err,
             cost=best_fit.cost,
         )
-    if best_fit.cost is not None and best_fit.cost > MAX_COST:
+    pair_cost = best_fit.cost
+    pair_valid = not (pair_cost is not None and pair_cost > MAX_COST)
+    if not pair_valid:
+        cost_for_log = pair_cost if pair_cost is not None else float("nan")
         logger.warning(
             "(%d, %d): аппроксимация отклонена f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
             ds_lf.temp_K,
             ds_lf.field_mT,
             best_fit.f1 / GHZ,
             best_fit.f2 / GHZ,
-            best_fit.cost,
+            cost_for_log,
         )
-        ds_lf.fit = ds_hf.fit = None
-        return None
+
+    pair_quality = _normalized_fit_error(ds_lf, best_fit, ds_hf) if pair_valid else math.inf
+
+    single_fit: Optional[FittingResult] = None
+    single_quality = math.inf
+    try:
+        ds_lf_single = replace(ds_lf, fit=None)
+        single_fit = process_lf_only(
+            ds_lf_single,
+            use_theory_guess=use_theory_guess,
+            precomputed_guess=guess,
+            skip_guess_lookup=True,
+        )
+    except Exception as exc:
+        logger.debug(
+            "(%d, %d): LF-only сравнение не выполнено: %s",
+            ds_lf.temp_K,
+            ds_lf.field_mT,
+            exc,
+        )
+        single_fit = None
     else:
+        if single_fit is not None:
+            single_quality = _normalized_fit_error(ds_lf_single, single_fit)
+            if not np.isfinite(single_quality):
+                single_fit = None
+                single_quality = math.inf
+
+    if pair_valid and (single_fit is None or single_quality >= pair_quality):
         ds_lf.fit = ds_hf.fit = best_fit
+        cost_for_log = pair_cost if pair_cost is not None else float("nan")
         logger.info(
-            "(%d, %d): аппроксимация успешна f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
+            "(%d, %d): выбрана совместная аппроксимация f1=%.3f ГГц, f2=%.3f ГГц, score=%.3e, cost=%.3e",
             ds_lf.temp_K,
             ds_lf.field_mT,
             best_fit.f1 / GHZ,
             best_fit.f2 / GHZ,
-            best_fit.cost,
+            pair_quality,
+            cost_for_log,
         )
         return best_fit
+
+    if single_fit is not None:
+        ds_lf.fit = single_fit
+        ds_hf.fit = None
+        logger.info(
+            "(%d, %d): выбрана LF-only аппроксимация f1=%.3f ГГц, f2=%.3f ГГц, score=%.3e",
+            ds_lf.temp_K,
+            ds_lf.field_mT,
+            single_fit.f1 / GHZ,
+            single_fit.f2 / GHZ,
+            single_quality,
+        )
+        return single_fit
+
+    ds_lf.fit = ds_hf.fit = None
+    return None
 
 
 def fit_single(ds: DataSet,
                freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
     t, y = ds.ts.t, ds.ts.s
 
-    def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
-        if t.size == 0:
-            return np.ones_like(t)
-        t_min = t.min()
-        t_len = t.max() - t_min
-        if t_len <= 0:
-            return np.ones_like(t)
-        borders = t_min + np.array([1, 2]) * t_len / 3
-        w = np.ones_like(t)
-        w[t >= borders[0]] = 0.8
-        w[t >= borders[1]] = 0.5
-        return w
-
     w = _piecewise_time_weights(t)
 
-    f1_init = ds.f1_init
-    f2_init = ds.f2_init
+    f1_init = _clamp_frequency(ds.f1_init, LF_BAND)
+    f2_init = _clamp_frequency(ds.f2_init, HF_BAND)
     logger.debug(
         "Начальные оценки (LF only): f1=%.3f ГГц, f2=%.3f ГГц",
         f1_init / GHZ,
@@ -1179,10 +1302,14 @@ def fit_single(ds: DataSet,
     ])
 
     if freq_bounds is None:
-        f1_lo, f1_hi = f1_init * 0.9, f1_init * 1.2
-        f2_lo, f2_hi = f2_init * 0.9, f2_init * 1.2
+        f1_lo, f1_hi = _sanitize_bounds(f1_init * 0.9, f1_init * 1.2, LF_BAND)
+        f2_lo, f2_hi = _sanitize_bounds(f2_init * 0.9, f2_init * 1.2, HF_BAND)
+        freq_bounds = ((f1_lo, f1_hi), (f2_lo, f2_hi))
     else:
-        (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
+        (f1_lo_raw, f1_hi_raw), (f2_lo_raw, f2_hi_raw) = freq_bounds
+        f1_lo, f1_hi = _sanitize_bounds(f1_lo_raw, f1_hi_raw, LF_BAND)
+        f2_lo, f2_hi = _sanitize_bounds(f2_lo_raw, f2_hi_raw, HF_BAND)
+        freq_bounds = ((f1_lo, f1_hi), (f2_lo, f2_hi))
 
     lo = np.array([
         0.5,
@@ -1212,7 +1339,11 @@ def fit_single(ds: DataSet,
     def residuals(p):
         (k, C, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_) = p
         core = _core_signal(t, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        return w * (k * core + C - y)
+        res = w * (k * core + C - y)
+        n = y.size
+        if n:
+            res = res / math.sqrt(n)
+        return res
 
     sol = least_squares(
         residuals,
@@ -1279,6 +1410,8 @@ def process_lf_only(
     ds_lf: DataSet,
     *,
     use_theory_guess: bool = True,
+    precomputed_guess: tuple[float, float] | None = None,
+    skip_guess_lookup: bool = False,
 ) -> Optional[FittingResult]:
     logger.info(
         "LF-only обработка пары T=%d K, H=%d mT",
@@ -1322,22 +1455,27 @@ def process_lf_only(
             logger.warning(
                 f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для HF (LF only)"
             )
-            range_hf = (
+            raw_range = (
                 (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ)
                 if f2_rough is not None
                 else HF_BAND
             )
+            range_hf = _sanitize_bounds(raw_range[0], raw_range[1], HF_BAND)
             logger.info(
                 "HF fallback range: %.1f–%.1f ГГц",
                 range_hf[0] / GHZ,
                 range_hf[1] / GHZ,
             )
             f2_fallback = _fallback_peak(
-                t, residual, ds_lf.ts.meta.fs, range_hf, f2_rough if f2_rough is not None else 0.0
+                t,
+                residual,
+                ds_lf.ts.meta.fs,
+                range_hf,
+                f2_rough if f2_rough is not None else 0.0,
             )
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
-            hf_c = [(f2_fallback, None)]
+            hf_c = [(_clamp_frequency(f2_fallback, HF_BAND), None)]
 
         spec_lf = y - np.mean(y)
         f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
@@ -1357,11 +1495,12 @@ def process_lf_only(
             logger.warning(
                 f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF (LF only)"
             )
-            range_lf = (
+            raw_range = (
                 (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ)
                 if f1_rough is not None
                 else LF_BAND
             )
+            range_lf = _sanitize_bounds(raw_range[0], raw_range[1], LF_BAND)
             logger.info(
                 "LF fallback range: %.1f–%.1f ГГц",
                 range_lf[0] / GHZ,
@@ -1377,11 +1516,16 @@ def process_lf_only(
             )
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
-            lf_c = [(f1_fallback, None)]
+            lf_c = [(_clamp_frequency(f1_fallback, LF_BAND), None)]
         return lf_c, hf_c, None
 
-    guess = None
-    if use_theory_guess and ds_lf.root:
+    guess = precomputed_guess
+    if (
+        guess is None
+        and use_theory_guess
+        and ds_lf.root
+        and not skip_guess_lookup
+    ):
         guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
 
     if guess is not None:
@@ -1411,7 +1555,8 @@ def process_lf_only(
             logger.warning(
                 f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для HF (LF only)"
             )
-            range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
+            raw_range = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
+            range_hf = _sanitize_bounds(raw_range[0], raw_range[1], HF_BAND)
             logger.info(
                 "HF fallback range: %.1f–%.1f ГГц",
                 range_hf[0] / GHZ,
@@ -1422,7 +1567,7 @@ def process_lf_only(
             )
             if f2_fallback is None:
                 raise RuntimeError("HF-тон не найден")
-            hf_cand = [(f2_fallback, None)]
+            hf_cand = [(_clamp_frequency(f2_fallback, HF_BAND), None)]
         spec_lf = y - np.mean(y)
         f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
         mask_lf = (
@@ -1436,7 +1581,8 @@ def process_lf_only(
             logger.warning(
                 f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF (LF only)"
             )
-            range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
+            raw_range = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
+            range_lf = _sanitize_bounds(raw_range[0], raw_range[1], LF_BAND)
             logger.info(
                 "LF fallback range: %.1f–%.1f ГГц",
                 range_lf[0] / GHZ,
@@ -1452,19 +1598,20 @@ def process_lf_only(
             )
             if f1_fallback is None:
                 raise RuntimeError("LF-тон не найден")
-            lf_cand = [(f1_fallback, None)]
+            lf_cand = [(_clamp_frequency(f1_fallback, LF_BAND), None)]
 
-        def _ensure_guess(cands, freq):
+        def _ensure_guess(cands, freq, band):
+            freq = _clamp_frequency(freq, band)
             for f, _ in cands:
                 if abs(f - freq) < 20e6:
                     return
             cands.append((freq, None))
 
-        _ensure_guess(lf_cand, f1_guess)
-        _ensure_guess(hf_cand, f2_guess)
+        _ensure_guess(lf_cand, f1_guess, LF_BAND)
+        _ensure_guess(hf_cand, f2_guess, HF_BAND)
         freq_bounds = (
-            (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
-            (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ),
+            _sanitize_bounds(f1_guess - 5 * GHZ, f1_guess + 5 * GHZ, LF_BAND),
+            _sanitize_bounds(f2_guess - 5 * GHZ, f2_guess + 5 * GHZ, HF_BAND),
         )
     else:
         logger.info(
