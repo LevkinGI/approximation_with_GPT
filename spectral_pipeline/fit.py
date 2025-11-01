@@ -628,6 +628,22 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         tau1_lo, tau1_hi = tau1_init * 0.8, tau1_init * 1.2
 
     proto_lf_hf = A1_init * np.exp(-t_hf / tau1_init) * np.cos(2 * PI * f1_init * t_hf + phi1_init)
+
+    def _rms(signal: NDArray) -> float:
+        if signal.size == 0:
+            return 0.0
+        centered = signal - float(np.mean(signal))
+        return float(np.sqrt(np.mean(centered ** 2)))
+
+    hf_target_amp = _rms(y_hf)
+    proto_amp = _rms(proto_lf_hf)
+    if proto_amp > 0 and np.isfinite(hf_target_amp):
+        hf_scale = hf_target_amp / proto_amp
+        if not np.isfinite(hf_scale) or hf_scale <= 0:
+            hf_scale = 1.0
+        proto_lf_hf = proto_lf_hf * hf_scale
+        A1_init *= hf_scale
+
     _, phi2_init, A2_init, tau2_init = _single_sine_refine(t_hf, y_hf - proto_lf_hf, f2_init)
     if ds_hf.zeta2 is None:
         tau2_lo, tau2_hi = 5e-12, 5e-10
