@@ -6,7 +6,7 @@ from pathlib import Path
 import math
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, minimize, OptimizeResult
 from scipy.signal import welch, find_peaks, get_window
 
 try:  # pragma: no cover - optional dependency
@@ -595,39 +595,41 @@ def _single_sine_refine(t: NDArray, y: NDArray, f0: float
     return f_est, phi_est, A_est, tau_est
 
 
-def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
-             freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
+def fit_pair(
+    ds_lf: DataSet,
+    ds_hf: DataSet,
+    freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None,
+):
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
-    def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
-        if t.size == 0:
-            return np.ones_like(t)
-        t_min = t.min()
-        t_len = t.max() - t_min
-        if t_len <= 0:
-            return np.ones_like(t)
-        borders = t_min + np.array([1, 2]) * t_len / 3
-        w = np.ones_like(t)
-        w[t >= borders[0]] = 0.8
-        w[t >= borders[1]] = 0.5
-        return w
+    freq_bounds = freq_bounds or (LF_BAND, HF_BAND)
+    freq_lo = np.array([freq_bounds[0][0], freq_bounds[1][0]], dtype=float)
+    freq_hi = np.array([freq_bounds[0][1], freq_bounds[1][1]], dtype=float)
+    freq_init = np.clip(np.array([10.0 * GHZ, 20.0 * GHZ], dtype=float), freq_lo, freq_hi)
 
-    w_lf = _piecewise_time_weights(t_lf)
+    tau_bounds = np.array([[0.1e-9, 5e-9], [0.01e-9, 0.5e-9]], dtype=float)
+    tau_init = np.clip(np.array([0.2e-9, 0.1e-9], dtype=float), tau_bounds[:, 0], tau_bounds[:, 1])
 
-    f1_init = ds_lf.f1_init
-    f2_init = ds_hf.f2_init
-    logger.debug(
-        "Начальные оценки: f1=%.3f ГГц, f2=%.3f ГГц", f1_init/GHZ, f2_init/GHZ)
+    def _initial_amp_phase(t: NDArray, y: NDArray, freq: float) -> tuple[float, float]:
+        if y.size < 3:
+            return 0.0, 0.0
+        try:
+            _, phi_est, amp_est, _ = _single_sine_refine(t, y, freq)
+            amp = float(amp_est) if np.isfinite(amp_est) else 0.0
+            phi = float(phi_est) if np.isfinite(phi_est) else 0.0
+            return amp, phi
+        except Exception as exc:  # pragma: no cover - refinement may fail on degenerate data
+            logger.debug('Single sine refine failed: %s', exc)
+            amp = float(0.5 * np.ptp(y)) if y.size else 0.0
+            return amp, 0.0
 
-    _, phi1_init, A1_init, tau1_init = _single_sine_refine(t_lf, y_lf, f1_init)
-    if ds_lf.zeta1 is None:
-        tau1_lo, tau1_hi = 5e-11, 5e-9
-    else:
-        tau1_init = 1.0 / ds_lf.zeta1
-        tau1_lo, tau1_hi = tau1_init * 0.8, tau1_init * 1.2
-
-    proto_lf_hf = A1_init * np.exp(-t_hf / tau1_init) * np.cos(2 * PI * f1_init * t_hf + phi1_init)
+    A1_init, phi1_init = _initial_amp_phase(t_lf, y_lf, freq_init[0])
+    proto_lf_hf = (
+        A1_init
+        * np.exp(-t_hf / tau_init[0])
+        * np.cos(2 * PI * freq_init[0] * t_hf + phi1_init)
+    )
 
     def _rms(signal: NDArray) -> float:
         if signal.size == 0:
@@ -646,121 +648,210 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     A1_init *= hf_scale
 
-    _, phi2_init, A2_init, tau2_init = _single_sine_refine(t_hf, y_hf - proto_lf_hf, f2_init)
-    if ds_hf.zeta2 is None:
-        tau2_lo, tau2_hi = 5e-12, 5e-10
-    else:
-        tau2_init = 1.0 / ds_hf.zeta2
-        tau2_lo, tau2_hi = tau2_init * 0.8, tau2_init * 1.2
+    A2_init, phi2_init = _initial_amp_phase(t_hf, y_hf - proto_lf_hf, freq_init[1])
 
-    k_lf_init = 1
-    k_hf_init = 1
-    C_lf_init = np.mean(y_lf)
-    C_hf_init = np.mean(y_hf)
+    k_lf_init = 1.0
+    k_hf_init = 1.0
+    C_lf_init = float(np.mean(y_lf)) if y_lf.size else 0.0
+    C_hf_init = float(np.mean(y_hf)) if y_hf.size else 0.0
 
-    p0 = np.array([
-        k_lf_init, k_hf_init,
-        C_lf_init, C_hf_init,
-        A1_init,    A2_init,
-        tau1_init,  tau2_init,
-        f1_init,    f2_init,
-        phi1_init,  phi2_init
-    ])
-
-    if freq_bounds is None:
-        f1_lo, f1_hi = f1_init * 0.9, f1_init * 1.2
-        f2_lo, f2_hi = f2_init * 0.9, f2_init * 1.2
-    else:
-        (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
-
-    lo = np.array([
-        0.5, 0.5,
-        C_lf_init - np.std(y_lf), C_hf_init - np.std(y_hf),
-        0.0, 0.0,
-        tau1_lo, tau2_lo,
-        f1_lo, f2_lo,
-        -PI, -PI
-    ])
-    hi = np.array([
-        2, 2,
-        C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf),
-        A1_init * 2, A2_init * 2,
-        tau1_hi, tau2_hi,
-        f1_hi, f2_hi,
-        PI, PI
-    ])
-
-    def residuals(p):
-        (k_lf, k_hf, C_lf, C_hf,
-         A1, A2, tau1, tau2,
-         f1_, f2_, phi1_, phi2_) = p
-
-        core_lf = _core_signal(t_lf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        core_hf = _core_signal(t_hf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        res_lf = w_lf * (k_lf * core_lf + C_lf - y_lf)
-        res_hf = k_hf * core_hf + C_hf - y_hf
-
-        # Normalize channel residuals so that the sum of squares corresponds to
-        # the mean squared error for each channel individually.
-        n_lf = y_lf.size
-        n_hf = y_hf.size
-        if n_lf:
-            res_lf = res_lf / math.sqrt(n_lf)
-        if n_hf:
-            res_hf = res_hf / math.sqrt(n_hf)
-
-        return np.concatenate([res_lf, res_hf])
-
-    sol = least_squares(
-        residuals,
-        p0,
-        bounds=(lo, hi),
-        method='trf',
-        ftol=1e-15, xtol=1e-15, gtol=1e-15,
-        max_nfev=100000,
-        loss='soft_l1',
-        f_scale=0.1,
-        x_scale='jac',
-        verbose=0,
+    fast_init = np.array(
+        [k_lf_init, k_hf_init, C_lf_init, C_hf_init, A1_init, A2_init, phi1_init, phi2_init],
+        dtype=float,
     )
-    p = sol.x
-    cost = sol.cost
-    m, n = sol.jac.shape
-    try:
-        cov = np.linalg.inv(sol.jac.T @ sol.jac) * 2 * cost / max(m - n, 1)
-    except np.linalg.LinAlgError:
-        cov = np.full((n, n), np.nan)
 
-    idx_f1 = 8
-    idx_f2 = 9
-    sigma_f1 = math.sqrt(abs(cov[idx_f1, idx_f1]))
-    sigma_f2 = math.sqrt(abs(cov[idx_f2, idx_f2]))
+    std_lf = float(np.std(y_lf)) if y_lf.size else 1.0
+    std_hf = float(np.std(y_hf)) if y_hf.size else 1.0
+    amp_bound_lf = max(abs(A1_init) * 2.0, float(np.ptp(y_lf)) if y_lf.size else 0.0, 1.0)
+    amp_bound_hf = max(abs(A2_init) * 2.0, float(np.ptp(y_hf)) if y_hf.size else 0.0, 1.0)
 
-    (k_lf, k_hf, C_lf, C_hf,
-      A1, A2, tau1, tau2,
-      f1_fin, f2_fin, phi1_fin, phi2_fin) = p
-    logger.debug(
-        "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
-        f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
+    fast_lo = np.array(
+        [
+            0.5,
+            0.5,
+            C_lf_init - std_lf,
+            C_hf_init - std_hf,
+            0.0,
+            0.0,
+            -PI,
+            -PI,
+        ],
+        dtype=float,
+    )
+    fast_hi = np.array(
+        [
+            2.0,
+            2.0,
+            C_lf_init + std_lf,
+            C_hf_init + std_hf,
+            amp_bound_lf,
+            amp_bound_hf,
+            PI,
+            PI,
+        ],
+        dtype=float,
+    )
 
-    return FittingResult(
+    n_lf = y_lf.size
+    n_hf = y_hf.size
+
+    def inner_fit(
+        freqs: np.ndarray,
+        taus: np.ndarray,
+        initial_fast: np.ndarray,
+    ) -> tuple[OptimizeResult | None, float]:
+        f1, f2 = float(freqs[0]), float(freqs[1])
+        tau1, tau2 = float(taus[0]), float(taus[1])
+
+        def residuals_inner(params: np.ndarray) -> np.ndarray:
+            k_lf, k_hf, C_lf, C_hf, A1, A2, phi1, phi2 = params
+            core_lf = _core_signal(t_lf, A1, A2, tau1, tau2, f1, f2, phi1, phi2)
+            core_hf = _core_signal(t_hf, A1, A2, tau1, tau2, f1, f2, phi1, phi2)
+            res_lf = k_lf * core_lf + C_lf - y_lf
+            res_hf = k_hf * core_hf + C_hf - y_hf
+            if n_lf:
+                res_lf = res_lf / math.sqrt(n_lf)
+            if n_hf:
+                res_hf = res_hf / math.sqrt(n_hf)
+            return np.concatenate([res_lf, res_hf])
+
+        try:
+            init = np.clip(initial_fast, fast_lo, fast_hi)
+            res = least_squares(
+                residuals_inner,
+                init,
+                bounds=(fast_lo, fast_hi),
+                method='trf',
+                max_nfev=5000,
+                ftol=1e-12,
+                xtol=1e-12,
+                gtol=1e-12,
+            )
+        except Exception as exc:  # pragma: no cover - safeguard against solver issues
+            logger.debug('Внутренняя оптимизация не удалась: %s', exc)
+            return None, math.inf
+
+        mse_sum = 2.0 * res.cost if np.isfinite(res.cost) else math.inf
+        return res, mse_sum
+
+    def fit_decays(
+        freqs: np.ndarray,
+        tau_guess: np.ndarray,
+        fast_guess: np.ndarray,
+    ) -> dict[str, object] | None:
+        best_cost = math.inf
+        best_tau = np.array(tau_guess, dtype=float)
+        best_res: OptimizeResult | None = None
+        current_fast = np.array(fast_guess, dtype=float)
+
+        initial_res, initial_cost = inner_fit(freqs, tau_guess, current_fast)
+        if initial_res is not None and math.isfinite(initial_cost):
+            best_cost = initial_cost
+            best_tau = np.array(tau_guess, dtype=float)
+            best_res = initial_res
+            current_fast = initial_res.x.copy()
+
+        def objective(taus: np.ndarray) -> float:
+            nonlocal current_fast, best_cost, best_tau, best_res
+            if np.any(~np.isfinite(taus)):
+                return math.inf
+            res, cost_val = inner_fit(freqs, taus, current_fast)
+            if res is None or not math.isfinite(cost_val):
+                return math.inf
+            current_fast = res.x.copy()
+            if cost_val < best_cost:
+                best_cost = cost_val
+                best_tau = np.array(taus, dtype=float)
+                best_res = res
+            return float(cost_val)
+
+        minimize(
+            objective,
+            x0=np.array(tau_guess, dtype=float),
+            method='L-BFGS-B',
+            bounds=[tuple(bound) for bound in tau_bounds],
+            options={'maxiter': 100, 'ftol': 1e-12},
+        )
+
+        if best_res is None or not math.isfinite(best_cost):
+            return None
+
+        return {
+            'taus': best_tau,
+            'fast_params': best_res.x.copy(),
+            'result': best_res,
+            'cost': float(best_cost),
+        }
+
+    best_state: dict[str, object] | None = None
+    last_tau = tau_init.copy()
+    last_fast = fast_init.copy()
+
+    initial_decays = fit_decays(freq_init, last_tau, last_fast)
+    if initial_decays is not None:
+        best_state = {
+            'freqs': freq_init.copy(),
+            **initial_decays,
+        }
+        last_tau = np.array(initial_decays['taus'], dtype=float)
+        last_fast = np.array(initial_decays['fast_params'], dtype=float)
+
+    def objective_freq(freqs: np.ndarray) -> float:
+        nonlocal best_state, last_tau, last_fast
+        if np.any(~np.isfinite(freqs)):
+            return math.inf
+        freqs = np.clip(freqs, freq_lo, freq_hi)
+        decays = fit_decays(freqs, last_tau, last_fast)
+        if decays is None:
+            return math.inf
+        last_tau = np.array(decays['taus'], dtype=float)
+        last_fast = np.array(decays['fast_params'], dtype=float)
+        cost_val = float(decays['cost'])
+        if best_state is None or cost_val < float(best_state['cost']):
+            best_state = {
+                'freqs': np.array(freqs, dtype=float),
+                **decays,
+            }
+        return cost_val
+
+    minimize(
+        objective_freq,
+        x0=freq_init,
+        method='L-BFGS-B',
+        bounds=list(zip(freq_lo, freq_hi)),
+        options={'maxiter': 100, 'ftol': 1e-12},
+    )
+
+    if best_state is None:
+        raise RuntimeError('Не удалось подобрать параметры для сигналов')
+
+    freqs_best = np.array(best_state['freqs'], dtype=float)
+    taus_best = np.array(best_state['taus'], dtype=float)
+    fast_params = np.array(best_state['fast_params'], dtype=float)
+    cost_val = float(best_state['cost'])
+
+    k_lf, k_hf, C_lf, C_hf, A1, A2, phi1, phi2 = fast_params
+    tau1, tau2 = taus_best
+    f1_fin, f2_fin = freqs_best
+
+    fit_result = FittingResult(
         f1=f1_fin,
         f2=f2_fin,
-        zeta1=1/tau1,
-        zeta2=1/tau2,
-        phi1=phi1_fin,
-        phi2=phi2_fin,
+        zeta1=1.0 / tau1 if tau1 else math.inf,
+        zeta2=1.0 / tau2 if tau2 else math.inf,
+        phi1=phi1,
+        phi2=phi2,
         A1=A1,
         A2=A2,
         k_lf=k_lf,
         k_hf=k_hf,
         C_lf=C_lf,
         C_hf=C_hf,
-        f1_err=sigma_f1,
-        f2_err=sigma_f2,
-        cost=cost,
-    ), cost
-
+        f1_err=None,
+        f2_err=None,
+        cost=cost_val,
+    )
+    return fit_result, cost_val
 
 def process_pair(
     ds_lf: DataSet,
