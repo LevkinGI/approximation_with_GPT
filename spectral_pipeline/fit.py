@@ -813,17 +813,47 @@ def process_pair(
         if not np.any(mask_hf):
             mask_hf = (HF_BAND[0] <= f_all) & (f_all <= HF_BAND[1])
             logger.debug("ESPRIT HF relaxed: %s", np.round(f_all[mask_hf] / GHZ, 3))
+        hf_c: list[tuple[float, Optional[float]]] = []
         if np.any(mask_hf):
-            hf_c = [(f, z if z > 0 else None)
-                    for f, z in zip(f_all[mask_hf], zeta_all[mask_hf])]
+            hf_c.extend(
+                [
+                    (float(f), float(z) if z > 0 else None)
+                    for f, z in zip(f_all[mask_hf], zeta_all[mask_hf])
+                ]
+            )
         else:
-            logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
-            range_hf = (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ) if f2_rough is not None else HF_BAND
-            logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
-            f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_rough if f2_rough is not None else 0.0)
-            if f2_fallback is None:
-                raise RuntimeError("HF-тон не найден")
-            hf_c = [(f2_fallback, None)]
+            logger.warning(
+                f"({ds_hf.temp_K}, {ds_hf.field_mT}): ESPRIT не дал HF-кандидатов"
+            )
+
+        range_hf = (
+            (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ)
+            if f2_rough is not None
+            else HF_BAND
+        )
+        logger.info(
+            "HF fallback range: %.1f–%.1f ГГц",
+            range_hf[0] / GHZ,
+            range_hf[1] / GHZ,
+        )
+        f2_fallback = _fallback_peak(
+            t_hf,
+            y_hf,
+            ds_hf.ts.meta.fs,
+            range_hf,
+            f2_rough if f2_rough is not None else 0.0,
+        )
+        if f2_fallback is not None:
+            if all(abs(f - f2_fallback) >= 20e6 for f, _ in hf_c):
+                hf_c.append((float(f2_fallback), None))
+                logger.info(
+                    "(%d, %d): добавлен HF-кандидат %.3f ГГц методом fallback",
+                    ds_hf.temp_K,
+                    ds_hf.field_mT,
+                    f2_fallback / GHZ,
+                )
+        elif not hf_c:
+            raise RuntimeError("HF-тон не найден")
         mask_lf = (
             (zeta_all > 0)
             & (LF_BAND[0] <= f_all)
@@ -834,15 +864,40 @@ def process_pair(
         if np.any(mask_lf):
             lf_c = _top2_nearest(f_all[mask_lf], zeta_all[mask_lf], f1_rough)
         else:
-            logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
-            range_lf = (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ) if f1_rough is not None else LF_BAND
-            logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
-            f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
-                                        range_lf, f1_rough if f1_rough is not None else 0.0,
-                                        avoid=hf_c[0][0] if hf_c else None)
-            if f1_fallback is None:
-                raise RuntimeError("LF-тон не найден")
-            lf_c = [(f1_fallback, None)]
+            logger.warning(
+                f"({ds_lf.temp_K}, {ds_lf.field_mT}): ESPRIT не дал LF-кандидатов"
+            )
+            lf_c = []
+
+        range_lf = (
+            (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ)
+            if f1_rough is not None
+            else LF_BAND
+        )
+        logger.info(
+            "LF fallback range: %.1f–%.1f ГГц",
+            range_lf[0] / GHZ,
+            range_lf[1] / GHZ,
+        )
+        f1_fallback = _fallback_peak(
+            t_lf,
+            y_lf,
+            ds_lf.ts.meta.fs,
+            range_lf,
+            f1_rough if f1_rough is not None else 0.0,
+            avoid=hf_c[0][0] if hf_c else None,
+        )
+        if f1_fallback is not None:
+            if all(abs(f - f1_fallback) >= 20e6 for f, _ in lf_c):
+                lf_c.append((float(f1_fallback), None))
+                logger.info(
+                    "(%d, %d): добавлен LF-кандидат %.3f ГГц методом fallback",
+                    ds_lf.temp_K,
+                    ds_lf.field_mT,
+                    f1_fallback / GHZ,
+                )
+        elif not lf_c:
+            raise RuntimeError("LF-тон не найден")
         return lf_c, hf_c, None
 
     guess = None
@@ -868,13 +923,35 @@ def process_pair(
             logger.debug("ESPRIT HF relaxed: %s", np.round(f_all[mask_hf] / GHZ, 3))
         hf_cand = _top2_nearest(f_all[mask_hf], np.maximum(zeta_all[mask_hf], 0.0), f2_guess) if np.any(mask_hf) else []
         if not hf_cand:
-            logger.warning(f"({ds_hf.temp_K}, {ds_hf.field_mT}): вызван fallback для HF")
-            range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
-            logger.info("HF fallback range: %.1f–%.1f ГГц", range_hf[0]/GHZ, range_hf[1]/GHZ)
-            f2_fallback = _fallback_peak(t_hf, y_hf, ds_hf.ts.meta.fs, range_hf, f2_guess)
-            if f2_fallback is None:
-                raise RuntimeError("HF-тон не найден")
-            hf_cand = [(f2_fallback, None)]
+            logger.warning(
+                f"({ds_hf.temp_K}, {ds_hf.field_mT}): ESPRIT не дал HF-кандидатов"
+            )
+
+        range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
+        logger.info(
+            "HF fallback range: %.1f–%.1f ГГц",
+            range_hf[0] / GHZ,
+            range_hf[1] / GHZ,
+        )
+        f2_fallback = _fallback_peak(
+            t_hf,
+            y_hf,
+            ds_hf.ts.meta.fs,
+            range_hf,
+            f2_guess,
+        )
+        if f2_fallback is not None and all(
+            abs(f - f2_fallback) >= 20e6 for f, _ in hf_cand
+        ):
+            hf_cand.append((float(f2_fallback), None))
+            logger.info(
+                "(%d, %d): добавлен HF-кандидат %.3f ГГц методом fallback",
+                ds_hf.temp_K,
+                ds_hf.field_mT,
+                f2_fallback / GHZ,
+            )
+        elif not hf_cand:
+            raise RuntimeError("HF-тон не найден")
         mask_lf = (
             (zeta_all > 0)
             & (LF_BAND[0] <= f_all)
@@ -884,15 +961,36 @@ def process_pair(
         logger.debug("ESPRIT LF filtered: %s", np.round(f_all[mask_lf] / GHZ, 3))
         lf_cand = _top2_nearest(f_all[mask_lf], zeta_all[mask_lf], f1_guess) if np.any(mask_lf) else []
         if not lf_cand:
-            logger.warning(f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF")
-            range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
-            logger.info("LF fallback range: %.1f–%.1f ГГц", range_lf[0]/GHZ, range_lf[1]/GHZ)
-            f1_fallback = _fallback_peak(t_lf, y_lf, ds_lf.ts.meta.fs,
-                                        range_lf, f1_guess,
-                                        avoid=hf_cand[0][0] if hf_cand else None)
-            if f1_fallback is None:
-                raise RuntimeError("LF-тон не найден")
-            lf_cand = [(f1_fallback, None)]
+            logger.warning(
+                f"({ds_lf.temp_K}, {ds_lf.field_mT}): ESPRIT не дал LF-кандидатов"
+            )
+
+        range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
+        logger.info(
+            "LF fallback range: %.1f–%.1f ГГц",
+            range_lf[0] / GHZ,
+            range_lf[1] / GHZ,
+        )
+        f1_fallback = _fallback_peak(
+            t_lf,
+            y_lf,
+            ds_lf.ts.meta.fs,
+            range_lf,
+            f1_guess,
+            avoid=hf_cand[0][0] if hf_cand else None,
+        )
+        if f1_fallback is not None and all(
+            abs(f - f1_fallback) >= 20e6 for f, _ in lf_cand
+        ):
+            lf_cand.append((float(f1_fallback), None))
+            logger.info(
+                "(%d, %d): добавлен LF-кандидат %.3f ГГц методом fallback",
+                ds_lf.temp_K,
+                ds_lf.field_mT,
+                f1_fallback / GHZ,
+            )
+        elif not lf_cand:
+            raise RuntimeError("LF-тон не найден")
         def _ensure_guess(cands, freq):
             for f, _ in cands:
                 if abs(f - freq) < 20e6:
@@ -1313,31 +1411,47 @@ def process_lf_only(
             "ESPRIT HF filtered (LF only): %s",
             np.round(f_all_hf[mask_hf] / GHZ, 3),
         )
+        hf_c: list[tuple[float, Optional[float]]] = []
         if np.any(mask_hf):
-            hf_c = [
-                (f, z if z > 0 else None)
-                for f, z in zip(f_all_hf[mask_hf], zeta_all_hf[mask_hf])
-            ]
+            hf_c.extend(
+                [
+                    (float(f), float(z) if z > 0 else None)
+                    for f, z in zip(f_all_hf[mask_hf], zeta_all_hf[mask_hf])
+                ]
+            )
         else:
             logger.warning(
-                f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для HF (LF only)"
+                f"({ds_lf.temp_K}, {ds_lf.field_mT}): ESPRIT не дал HF-кандидатов (LF only)"
             )
-            range_hf = (
-                (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ)
-                if f2_rough is not None
-                else HF_BAND
-            )
-            logger.info(
-                "HF fallback range: %.1f–%.1f ГГц",
-                range_hf[0] / GHZ,
-                range_hf[1] / GHZ,
-            )
-            f2_fallback = _fallback_peak(
-                t, residual, ds_lf.ts.meta.fs, range_hf, f2_rough if f2_rough is not None else 0.0
-            )
-            if f2_fallback is None:
-                raise RuntimeError("HF-тон не найден")
-            hf_c = [(f2_fallback, None)]
+
+        range_hf = (
+            (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ)
+            if f2_rough is not None
+            else HF_BAND
+        )
+        logger.info(
+            "HF fallback range: %.1f–%.1f ГГц",
+            range_hf[0] / GHZ,
+            range_hf[1] / GHZ,
+        )
+        f2_fallback = _fallback_peak(
+            t,
+            residual,
+            ds_lf.ts.meta.fs,
+            range_hf,
+            f2_rough if f2_rough is not None else 0.0,
+        )
+        if f2_fallback is not None:
+            if all(abs(f - f2_fallback) >= 20e6 for f, _ in hf_c):
+                hf_c.append((float(f2_fallback), None))
+                logger.info(
+                    "(%d, %d): добавлен HF-кандидат %.3f ГГц методом fallback (LF only)",
+                    ds_lf.temp_K,
+                    ds_lf.field_mT,
+                    f2_fallback / GHZ,
+                )
+        elif not hf_c:
+            raise RuntimeError("HF-тон не найден")
 
         spec_lf = y - np.mean(y)
         f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
@@ -1355,29 +1469,39 @@ def process_lf_only(
             lf_c = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_rough)
         else:
             logger.warning(
-                f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF (LF only)"
+                f"({ds_lf.temp_K}, {ds_lf.field_mT}): ESPRIT не дал LF-кандидатов (LF only)"
             )
-            range_lf = (
-                (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ)
-                if f1_rough is not None
-                else LF_BAND
-            )
-            logger.info(
-                "LF fallback range: %.1f–%.1f ГГц",
-                range_lf[0] / GHZ,
-                range_lf[1] / GHZ,
-            )
-            f1_fallback = _fallback_peak(
-                t,
-                y,
-                ds_lf.ts.meta.fs,
-                range_lf,
-                f1_rough if f1_rough is not None else 0.0,
-                avoid=hf_c[0][0] if hf_c else None,
-            )
-            if f1_fallback is None:
-                raise RuntimeError("LF-тон не найден")
-            lf_c = [(f1_fallback, None)]
+            lf_c = []
+
+        range_lf = (
+            (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ)
+            if f1_rough is not None
+            else LF_BAND
+        )
+        logger.info(
+            "LF fallback range: %.1f–%.1f ГГц",
+            range_lf[0] / GHZ,
+            range_lf[1] / GHZ,
+        )
+        f1_fallback = _fallback_peak(
+            t,
+            y,
+            ds_lf.ts.meta.fs,
+            range_lf,
+            f1_rough if f1_rough is not None else 0.0,
+            avoid=hf_c[0][0] if hf_c else None,
+        )
+        if f1_fallback is not None:
+            if all(abs(f - f1_fallback) >= 20e6 for f, _ in lf_c):
+                lf_c.append((float(f1_fallback), None))
+                logger.info(
+                    "(%d, %d): добавлен LF-кандидат %.3f ГГц методом fallback (LF only)",
+                    ds_lf.temp_K,
+                    ds_lf.field_mT,
+                    f1_fallback / GHZ,
+                )
+        elif not lf_c:
+            raise RuntimeError("LF-тон не найден")
         return lf_c, hf_c, None
 
     guess = None
@@ -1409,20 +1533,34 @@ def process_lf_only(
         ) if np.any(mask_hf) else []
         if not hf_cand:
             logger.warning(
-                f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для HF (LF only)"
+                f"({ds_lf.temp_K}, {ds_lf.field_mT}): ESPRIT не дал HF-кандидатов (LF only)"
             )
-            range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
+
+        range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
+        logger.info(
+            "HF fallback range: %.1f–%.1f ГГц",
+            range_hf[0] / GHZ,
+            range_hf[1] / GHZ,
+        )
+        f2_fallback = _fallback_peak(
+            t,
+            residual,
+            ds_lf.ts.meta.fs,
+            range_hf,
+            f2_guess,
+        )
+        if f2_fallback is not None and all(
+            abs(f - f2_fallback) >= 20e6 for f, _ in hf_cand
+        ):
+            hf_cand.append((float(f2_fallback), None))
             logger.info(
-                "HF fallback range: %.1f–%.1f ГГц",
-                range_hf[0] / GHZ,
-                range_hf[1] / GHZ,
+                "(%d, %d): добавлен HF-кандидат %.3f ГГц методом fallback (LF only)",
+                ds_lf.temp_K,
+                ds_lf.field_mT,
+                f2_fallback / GHZ,
             )
-            f2_fallback = _fallback_peak(
-                t, residual, ds_lf.ts.meta.fs, range_hf, f2_guess
-            )
-            if f2_fallback is None:
-                raise RuntimeError("HF-тон не найден")
-            hf_cand = [(f2_fallback, None)]
+        elif not hf_cand:
+            raise RuntimeError("HF-тон не найден")
         spec_lf = y - np.mean(y)
         f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
         mask_lf = (
@@ -1434,25 +1572,35 @@ def process_lf_only(
         lf_cand = _top2_nearest(f_all_lf[mask_lf], zeta_all_lf[mask_lf], f1_guess) if np.any(mask_lf) else []
         if not lf_cand:
             logger.warning(
-                f"({ds_lf.temp_K}, {ds_lf.field_mT}): вызван fallback для LF (LF only)"
+                f"({ds_lf.temp_K}, {ds_lf.field_mT}): ESPRIT не дал LF-кандидатов (LF only)"
             )
-            range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
+
+        range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
+        logger.info(
+            "LF fallback range: %.1f–%.1f ГГц",
+            range_lf[0] / GHZ,
+            range_lf[1] / GHZ,
+        )
+        f1_fallback = _fallback_peak(
+            t,
+            y,
+            ds_lf.ts.meta.fs,
+            range_lf,
+            f1_guess,
+            avoid=hf_cand[0][0] if hf_cand else None,
+        )
+        if f1_fallback is not None and all(
+            abs(f - f1_fallback) >= 20e6 for f, _ in lf_cand
+        ):
+            lf_cand.append((float(f1_fallback), None))
             logger.info(
-                "LF fallback range: %.1f–%.1f ГГц",
-                range_lf[0] / GHZ,
-                range_lf[1] / GHZ,
+                "(%d, %d): добавлен LF-кандидат %.3f ГГц методом fallback (LF only)",
+                ds_lf.temp_K,
+                ds_lf.field_mT,
+                f1_fallback / GHZ,
             )
-            f1_fallback = _fallback_peak(
-                t,
-                y,
-                ds_lf.ts.meta.fs,
-                range_lf,
-                f1_guess,
-                avoid=hf_cand[0][0] if hf_cand else None,
-            )
-            if f1_fallback is None:
-                raise RuntimeError("LF-тон не найден")
-            lf_cand = [(f1_fallback, None)]
+        elif not lf_cand:
+            raise RuntimeError("LF-тон не найден")
 
         def _ensure_guess(cands, freq):
             for f, _ in cands:
