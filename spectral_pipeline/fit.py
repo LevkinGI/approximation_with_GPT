@@ -6,7 +6,7 @@ from pathlib import Path
 import math
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import least_squares, minimize, OptimizeResult
+from scipy.optimize import least_squares, minimize, OptimizeResult, dual_annealing, minimize_scalar
 from scipy.signal import welch, find_peaks, get_window
 
 try:  # pragma: no cover - optional dependency
@@ -641,10 +641,10 @@ def fit_pair(
     hf_target_amp = _rms(y_hf)
     proto_amp = _rms(proto_lf_hf)
     if proto_amp > 0 and np.isfinite(hf_target_amp):
-        hf_scale = hf_target_amp / proto_amp
-        if not np.isfinite(hf_scale) or hf_scale <= 0:
-            hf_scale = 1.0
-        proto_lf_hf = proto_lf_hf * hf_scale
+        ratio = hf_target_amp / proto_amp
+        if np.isfinite(ratio) and ratio > 0:
+            hf_scale = ratio
+            proto_lf_hf = proto_lf_hf * hf_scale
 
     A1_init *= hf_scale
 
@@ -695,6 +695,18 @@ def fit_pair(
     n_lf = y_lf.size
     n_hf = y_hf.size
 
+    def _fft_peak_in_band(signal: NDArray, fs: float, band: tuple[float, float]) -> float | None:
+        freqs, amps = _fft_spectrum(signal, fs)
+        mask = (freqs >= band[0]) & (freqs <= band[1])
+        if not mask.any():
+            return None
+        sub_freqs = freqs[mask]
+        sub_amps = amps[mask]
+        if sub_amps.size == 0:
+            return None
+        idx = int(np.argmax(sub_amps))
+        return float(sub_freqs[idx])
+
     def inner_fit(
         freqs: np.ndarray,
         taus: np.ndarray,
@@ -721,148 +733,199 @@ def fit_pair(
                 residuals_inner,
                 init,
                 bounds=(fast_lo, fast_hi),
-                method='trf',
+                method="trf",
                 max_nfev=5000,
                 ftol=1e-12,
                 xtol=1e-12,
                 gtol=1e-12,
             )
         except Exception as exc:  # pragma: no cover - safeguard against solver issues
-            logger.debug('Внутренняя оптимизация не удалась: %s', exc)
+            logger.debug("Внутренняя оптимизация не удалась: %s", exc)
             return None, math.inf
 
         mse_sum = 2.0 * res.cost if np.isfinite(res.cost) else math.inf
         return res, mse_sum
 
-    def fit_decays(
+    def optimise_decays(
         freqs: np.ndarray,
-        tau_guess: np.ndarray,
-        fast_guess: np.ndarray,
+        tau_seed: np.ndarray,
+        fast_seed: np.ndarray,
     ) -> dict[str, object] | None:
-        best_cost = math.inf
-        best_tau = np.array(tau_guess, dtype=float)
-        best_res: OptimizeResult | None = None
-        current_fast = np.array(fast_guess, dtype=float)
+        best: dict[str, object] | None = None
+        local_fast = np.array(fast_seed, dtype=float)
+        tau_seed = np.clip(np.array(tau_seed, dtype=float), tau_bounds[:, 0], tau_bounds[:, 1])
 
-        initial_res, initial_cost = inner_fit(freqs, tau_guess, current_fast)
-        if initial_res is not None and math.isfinite(initial_cost):
-            best_cost = initial_cost
-            best_tau = np.array(tau_guess, dtype=float)
-            best_res = initial_res
-            current_fast = initial_res.x.copy()
-
-        def objective(taus: np.ndarray) -> float:
-            nonlocal current_fast, best_cost, best_tau, best_res
+        def objective_tau(taus: np.ndarray) -> float:
+            nonlocal best, local_fast
             if np.any(~np.isfinite(taus)):
                 return math.inf
-            res, cost_val = inner_fit(freqs, taus, current_fast)
+            taus = np.clip(taus, tau_bounds[:, 0], tau_bounds[:, 1])
+            res, cost_val = inner_fit(freqs, taus, local_fast)
             if res is None or not math.isfinite(cost_val):
                 return math.inf
-            current_fast = res.x.copy()
-            if cost_val < best_cost:
-                best_cost = cost_val
-                best_tau = np.array(taus, dtype=float)
-                best_res = res
+            local_fast = res.x.copy()
+            snapshot = {
+                "taus": np.array(taus, dtype=float),
+                "fast_params": res.x.copy(),
+                "result": res,
+                "cost": float(cost_val),
+            }
+            if best is None or float(cost_val) < float(best["cost"]):
+                best = snapshot
             return float(cost_val)
 
+        # Evaluate the seed explicitly to populate ``best`` even if the optimiser
+        # exits immediately (for example, due to zero gradient).
+        objective_tau(tau_seed)
+
         minimize(
-            objective,
-            x0=np.array(tau_guess, dtype=float),
-            method='L-BFGS-B',
+            objective_tau,
+            x0=tau_seed,
+            method="L-BFGS-B",
             bounds=[tuple(bound) for bound in tau_bounds],
-            options={'maxiter': 100, 'ftol': 1e-12},
+            options={"maxiter": 150, "ftol": 1e-12},
         )
 
-        if best_res is None or not math.isfinite(best_cost):
-            return None
-
-        return {
-            'taus': best_tau,
-            'fast_params': best_res.x.copy(),
-            'result': best_res,
-            'cost': float(best_cost),
-        }
+        return best
 
     best_state: dict[str, object] | None = None
-    last_tau = tau_init.copy()
-    last_fast = fast_init.copy()
+    freq_cache: dict[tuple[float, float], dict[str, object] | None] = {}
 
-    initial_decays = fit_decays(freq_init, last_tau, last_fast)
-    if initial_decays is not None:
-        best_state = {
-            'freqs': freq_init.copy(),
-            **initial_decays,
-        }
-        last_tau = np.array(initial_decays['taus'], dtype=float)
-        last_fast = np.array(initial_decays['fast_params'], dtype=float)
-
-    def objective_freq(freqs: np.ndarray) -> float:
-        nonlocal best_state, last_tau, last_fast
-        if np.any(~np.isfinite(freqs)):
+    def objective_freq_raw(freq_vector: np.ndarray) -> float:
+        nonlocal best_state
+        if np.any(~np.isfinite(freq_vector)):
             return math.inf
-        freqs = np.clip(freqs, freq_lo, freq_hi)
+        freqs = np.clip(np.array(freq_vector, dtype=float), freq_lo, freq_hi)
         if freqs[1] <= freqs[0]:
             return math.inf
-        decays = fit_decays(freqs, last_tau, last_fast)
-        if decays is None:
+
+        key = (float(freqs[0]), float(freqs[1]))
+        cached = freq_cache.get(key)
+        if cached is None:
+            cached = optimise_decays(freqs, tau_init, fast_init)
+            freq_cache[key] = cached
+
+        if cached is None:
             return math.inf
-        last_tau = np.array(decays['taus'], dtype=float)
-        last_fast = np.array(decays['fast_params'], dtype=float)
-        cost_val = float(decays['cost'])
-        if best_state is None or cost_val < float(best_state['cost']):
+
+        cost_val = float(cached["cost"])
+        if not math.isfinite(cost_val):
+            return math.inf
+
+        if best_state is None or cost_val < float(best_state["cost"]):
             best_state = {
-                'freqs': np.array(freqs, dtype=float),
-                **decays,
+                "freqs": freqs.copy(),
+                **cached,
             }
         return cost_val
 
-    # Coarse-to-fine exploration of the frequency space followed by a local polish.
-    coarse_lf = np.linspace(freq_lo[0], freq_hi[0], 6)
-    coarse_hf = np.linspace(freq_lo[1], freq_hi[1], 6)
-    for f1 in coarse_lf:
-        for f2 in coarse_hf:
-            objective_freq(np.array([f1, f2], dtype=float))
+    def objective_freq(x: np.ndarray) -> float:
+        return objective_freq_raw(np.array(x, dtype=float))
 
-    seed_centers = [
-        freq_init.copy(),
-        np.array([(freq_lo[0] + freq_hi[0]) / 2.0, (freq_lo[1] + freq_hi[1]) / 2.0], dtype=float),
-        np.array([max(freq_lo[0], freq_hi[0] - 5 * GHZ), max(freq_lo[1], freq_hi[1] - 5 * GHZ)], dtype=float),
-    ]
-    for seed in seed_centers:
-        center = np.clip(seed, freq_lo, freq_hi)
-        for span in (10 * GHZ, 5 * GHZ, 2 * GHZ, 1 * GHZ, 0.5 * GHZ):
-            lf_min = max(freq_lo[0], center[0] - span)
-            lf_max = min(freq_hi[0], center[0] + span)
-            hf_min = max(freq_lo[1], center[1] - span)
-            hf_max = min(freq_hi[1], center[1] + span)
-            grid_lf = np.linspace(lf_min, lf_max, 5)
-            grid_hf = np.linspace(hf_min, hf_max, 5)
-            for f1 in grid_lf:
-                for f2 in grid_hf:
-                    objective_freq(np.array([f1, f2], dtype=float))
-            if best_state is not None:
-                center = np.clip(np.array(best_state['freqs'], dtype=float), freq_lo, freq_hi)
+    bounds = list(zip(freq_lo, freq_hi))
 
-    start_freqs = (
-        np.array(best_state['freqs'], dtype=float)
-        if best_state is not None
-        else freq_init
-    )
-    minimize(
+    # Evaluate the mandated starting point explicitly to seed caches.
+    objective_freq(freq_init)
+
+    # Global exploration via dual annealing to avoid getting stuck at 10/20 ГГц.
+    anneal_res = dual_annealing(
         objective_freq,
-        x0=start_freqs,
-        method='L-BFGS-B',
-        bounds=list(zip(freq_lo, freq_hi)),
-        options={'maxiter': 50, 'ftol': 1e-12},
+        bounds=bounds,
+        x0=freq_init,
+        seed=1234,
+        no_local_search=False,
+        maxiter=40,
+        minimizer_kwargs={
+            "method": "L-BFGS-B",
+            "bounds": bounds,
+            "options": {"maxiter": 60, "ftol": 1e-12},
+        },
     )
+
+    freq_start = np.clip(np.array(anneal_res.x, dtype=float), freq_lo, freq_hi)
+    candidate_starts = [freq_init, freq_start]
+
+    lf_fft_peak = _fft_peak_in_band(y_lf - np.mean(y_lf), ds_lf.ts.meta.fs, freq_bounds[0])
+    hf_fft_peak = _fft_peak_in_band(y_hf - np.mean(y_hf), ds_hf.ts.meta.fs, freq_bounds[1])
+    if lf_fft_peak is not None and hf_fft_peak is not None:
+        fft_guess = np.array([lf_fft_peak, hf_fft_peak], dtype=float)
+        candidate_starts.append(np.clip(fft_guess, freq_lo, freq_hi))
+
+    # Encourage exploration of high-frequency regions in addition to the mandated
+    # initial guess and the annealing outcome.
+    high_corner = np.array(
+        [
+            freq_lo[0] + 0.75 * (freq_hi[0] - freq_lo[0]),
+            freq_lo[1] + 0.75 * (freq_hi[1] - freq_lo[1]),
+        ],
+        dtype=float,
+    )
+    candidate_starts.append(np.clip(high_corner, freq_lo, freq_hi))
+
+    forced_high = np.array([freq_init[0], min(freq_hi[1], freq_init[1] + 10 * GHZ)], dtype=float)
+    candidate_starts.append(np.clip(forced_high, freq_lo, freq_hi))
+
+    rng = np.random.default_rng(1234)
+    random_lf = rng.uniform(freq_lo[0], freq_hi[0], size=4)
+    random_hf = rng.uniform(freq_lo[1], freq_hi[1], size=4)
+    random_hf = np.maximum(random_hf, random_lf + 0.5 * GHZ)
+    random_hf = np.clip(random_hf, freq_lo[1], freq_hi[1])
+    for lf_seed, hf_seed in zip(random_lf, random_hf):
+        candidate_starts.append(np.array([lf_seed, hf_seed], dtype=float))
 
     if best_state is None:
-        raise RuntimeError('Не удалось подобрать параметры для сигналов')
+        candidate_starts.insert(0, freq_init)
 
-    freqs_best = np.array(best_state['freqs'], dtype=float)
-    taus_best = np.array(best_state['taus'], dtype=float)
-    fast_params = np.array(best_state['fast_params'], dtype=float)
-    cost_val = float(best_state['cost'])
+    for start in candidate_starts:
+        start = np.clip(np.array(start, dtype=float), freq_lo, freq_hi)
+        objective_freq(start)
+        minimize(
+            objective_freq,
+            x0=start,
+            method="L-BFGS-B",
+            bounds=bounds,
+            options={"maxiter": 200, "ftol": 1e-12},
+        )
+
+    if best_state is None:
+        raise RuntimeError("Не удалось подобрать параметры для сигналов")
+
+    # One-dimensional polishing of each frequency with the other fixed.
+    freq_refined = np.array(best_state["freqs"], dtype=float)
+    for idx in range(2):
+        low, high = bounds[idx]
+        if idx == 1:
+            low = max(low, freq_refined[0] + 0.1 * GHZ)
+        else:
+            high = min(high, freq_refined[1] - 0.1 * GHZ)
+        if high <= low:
+            continue
+
+        def scalar_obj(val: float) -> float:
+            vec = freq_refined.copy()
+            vec[idx] = val
+            if idx == 1 and val <= vec[0]:
+                return math.inf
+            return objective_freq(vec)
+
+        res_scalar = minimize_scalar(
+            scalar_obj,
+            bounds=(low, high),
+            method="bounded",
+            options={"xatol": 1e6, "maxiter": 200},
+        )
+        if res_scalar.success and np.isfinite(res_scalar.fun):
+            freq_refined[idx] = float(res_scalar.x)
+            objective_freq(freq_refined)
+
+    best_state = best_state or {}
+    if "freqs" in best_state:
+        best_state["freqs"] = np.array(freq_refined, dtype=float)
+
+    freqs_best = np.array(best_state["freqs"], dtype=float)
+    taus_best = np.array(best_state["taus"], dtype=float)
+    fast_params = np.array(best_state["fast_params"], dtype=float)
+    cost_val = float(best_state["cost"])
 
     k_lf, k_hf, C_lf, C_hf, A1, A2, phi1, phi2 = fast_params
     tau1, tau2 = taus_best
