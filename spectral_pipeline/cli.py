@@ -12,35 +12,7 @@ from openpyxl.styles import Border, Side, Alignment
 from . import DataSet, GHZ, logger, LOG_PATH
 from .io import load_records
 from .fit import process_pair, process_lf_only
-from .plotting import visualize_without_spectra, visualize_stacked
-
-
-@lru_cache(maxsize=None)
-def _find_crossing(root: str, field_mT: int, temp_K: int):
-    """Return axis type and value where HF and LF curves intersect.
-
-    Searches first-approximation files ``H_{field}.npy`` or ``T_{temp}.npy``
-    located in ``root``.  If intersection is not found, returns ``None``.
-    """
-    path_root = Path(root)
-    path_H = path_root / f"H_{field_mT}.npy"
-    path_T = path_root / f"T_{temp_K}.npy"
-    arr = None
-    axis_name = None
-    if path_H.exists():
-        arr = np.load(path_H)
-        axis_name = "T"
-    elif path_T.exists():
-        arr = np.load(path_T)
-        axis_name = "H"
-    if arr is None or arr.shape[0] < 3:
-        return None
-    axis, hf, lf = arr[0], arr[1], arr[2]
-    diff = hf - lf
-    idx = np.where(diff <= 0)[0]
-    if idx.size:
-        return axis_name, float(axis[idx[0]])
-    return None
+from .plotting import visualize_stacked
 
 
 def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
@@ -89,6 +61,7 @@ def main(
     excel_path: str | None = None,
     log_level: str = "DEBUG",
     use_theory_guess: bool = True,
+    lf_only_analysis: bool = True,
 ):
     level = getattr(logging, log_level.upper(), logging.INFO)
     logger.setLevel(level)
@@ -113,33 +86,14 @@ def main(
             continue
         ds_lf = pair['LF']
         ds_hf = pair.get('HF')
-        cross = _find_crossing(str(root), ds_lf.field_mT, ds_lf.temp_K)
-        use_lf_only = False
-        if cross is not None:
-            axis, val = cross
-            if axis == 'T' and ds_lf.temp_K >= val:
-                use_lf_only = True
-            if axis == 'H' and ds_lf.field_mT >= val:
-                use_lf_only = True
-        if use_lf_only or ds_hf is None:
-            try:
-                fit = process_lf_only(ds_lf, use_theory_guess=use_theory_guess)
-            except Exception as e:
-                logger.error("Ошибка обработки %s: %s", key, e)
-            else:
-                if fit is not None:
-                    success_count += 1
-                    ds_hf = ds_hf or ds_lf
-                    triples.append((ds_lf, ds_hf))
+        try:
+            fit = process_pair(ds_lf, ds_hf, use_theory_guess=use_theory_guess, lf_only_analysis=lf_only_analysis)
+        except Exception as e:
+            logger.error("Ошибка обработки %s: %s", key, e)
         else:
-            try:
-                fit = process_pair(ds_lf, ds_hf, use_theory_guess=use_theory_guess)
-            except Exception as e:
-                logger.error("Ошибка обработки %s: %s", key, e)
-            else:
-                if fit is not None:
-                    success_count += 1
-                    triples.append((ds_lf, ds_hf))
+            if fit is not None:
+                success_count += 1
+                triples.append((ds_lf, ds_hf))
     logger.info("Успешно аппроксимировано пар: %d", success_count)
     if do_plot and success_count:
         visualize_stacked(triples, use_theory_guess=use_theory_guess)
@@ -182,7 +136,19 @@ if __name__ == '__main__':
         action='store_false',
         help='не использовать теоретические значения при подборе',
     )
-    parser.set_defaults(use_theory_guess=True)
+    parser.add_argument(
+        '--on-lf-only-analysis',
+        dest='lf_only_analysis',
+        action='store_true',
+        help='добавить анализ только LF сигнала',
+    )
+    parser.add_argument(
+        '--off-lf-only-analysis',
+        dest='lf_only_analysis',
+        action='store_false',
+        help='исключить анализ только LF сигнала',
+    )
+    parser.set_defaults(use_theory_guess=False, lf_only_analysis=False)
     args = parser.parse_args()
     main(args.data_dir, do_plot=not args.no_plot, excel_path=args.excel,
-         log_level=args.log_level, use_theory_guess=args.use_theory_guess)
+         log_level=args.log_level, use_theory_guess=args.use_theory_guess, lf_only_analysis=args.lf_only_analysis)
