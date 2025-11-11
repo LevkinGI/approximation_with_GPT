@@ -232,11 +232,37 @@ def visualize_stacked(
                 p.phi2,
             )
             y_fit = p.k_lf * core + shift
+            y_lf = p.k_lf * (p.A1 * np.exp(-ds_lf.ts.t * p.zeta1) * np.cos(2*np.pi*p.f1*ds_lf.ts.t + p.phi1)) + shift
+            y_hf = p.k_lf * (p.A2 * np.exp(-ds_lf.ts.t * p.zeta2) * np.cos(2*np.pi*p.f2*ds_lf.ts.t + p.phi2)) + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_lf.ts.t / NS,
                     y=y_fit,
                     line=dict(width=2, dash="dash", color=FIT_LF),
+                    name=f"{varying} = {var_value} {var_label}",
+                ),
+                1,
+                1,
+            )
+            fig.add_trace(
+                go.Scattergl(
+                    x=ds_lf.ts.t / NS,
+                    y=y_lf,
+                    opacity=0.5,
+                    mode="lines",
+                    line=dict(width=2, color='rgb(27,158,119)'),
+                    name=f"{varying} = {var_value} {var_label}",
+                ),
+                1,
+                1,
+            )
+            fig.add_trace(
+                go.Scattergl(
+                    x=ds_lf.ts.t / NS,
+                    y=y_hf,
+                    opacity=0.5,
+                    mode="lines",
+                    line=dict(width=2, color='rgb(166,118,29)'),
                     name=f"{varying} = {var_value} {var_label}",
                 ),
                 1,
@@ -271,11 +297,37 @@ def visualize_stacked(
                 p.phi2,
             )
             y_fit = p.k_hf * core + shift
+            y_lf = p.k_hf * (p.A1 * np.exp(-ds_hf.ts.t * p.zeta1) * np.cos(2*np.pi*p.f1*ds_hf.ts.t + p.phi1)) + shift
+            y_hf = p.k_hf * (p.A2 * np.exp(-ds_hf.ts.t * p.zeta2) * np.cos(2*np.pi*p.f2*ds_hf.ts.t + p.phi2)) + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_hf.ts.t / NS,
                     y=y_fit,
                     line=dict(width=2, dash="dash", color=FIT_HF),
+                    name=f"{varying} = {var_value} {var_label}",
+                ),
+                1,
+                2,
+            )
+            fig.add_trace(
+                go.Scattergl(
+                    x=ds_hf.ts.t / NS,
+                    y=y_lf,
+                    opacity=0.5,
+                    mode="lines",
+                    line=dict(width=2, color='rgb(27,158,119)'),
+                    name=f"{varying} = {var_value} {var_label}",
+                ),
+                1,
+                2,
+            )
+            fig.add_trace(
+                go.Scattergl(
+                    x=ds_hf.ts.t / NS,
+                    y=y_hf,
+                    opacity=0.5,
+                    mode="lines",
+                    line=dict(width=2, color='rgb(166,118,29)'),
                     name=f"{varying} = {var_value} {var_label}",
                 ),
                 1,
@@ -752,443 +804,6 @@ def visualize_stacked(
             row=r,
             col=4,
         )
-    fig.update_xaxes(title_font=dict(size=28), tickfont=dict(size=24))
-    fig.update_yaxes(title_font=dict(size=28), tickfont=dict(size=24))
-
-    if outfile:
-        fig.write_html(outfile)
-        print(f"HTML сохранён в {outfile}")
-    else:
-        print("\nОтображение объединённого графика…")
-        fig.show()
-
-
-def visualize_without_spectra(
-    triples: List[Tuple[DataSet, DataSet]],
-    *,
-    title: str | None = None,
-    outfile: str | None = None,
-    use_theory_guess: bool = True,
-) -> None:
-    """Визуализация без спектров с ошибками частот.
-
-    Показывает все LF/HF сигналы и их аппроксимации с вертикальными смещениями
-    и сводный график частот с погрешностями. При ``outfile`` сохраняет HTML,
-    иначе выводит интерактивный график.
-    """
-
-    if not triples:
-        return
-
-    RAW_CLR = "#1fbe63"
-    FIT_LF = "red"
-    FIT_HF = "blue"
-    BASE_CLR = "#606060"
-
-    all_H = {ds_lf.field_mT for ds_lf, _ in triples}
-    all_T = {ds_lf.temp_K for ds_lf, _ in triples}
-    if len(all_H) == 1 and len(all_T) > 1:
-        varying, var_label = "T", "K"
-        key_func = lambda ds_lf: ds_lf.temp_K
-    elif len(all_T) == 1 and len(all_H) > 1:
-        varying, var_label = "H", "mT"
-        key_func = lambda ds_lf: ds_lf.field_mT
-    else:
-        raise RuntimeError("Скрипт ожидает изменение только H или T.")
-
-    triples_sorted = sorted(triples, key=lambda p: key_func(p[0]))
-
-    ranges = []
-    for pair in triples_sorted:
-        for ds in pair:
-            if ds.fit is not None:
-                mask = ds.ts.t > 0
-                p = ds.fit
-                core = _core_signal(
-                    ds.ts.t,
-                    p.A1,
-                    p.A2,
-                    1 / p.zeta1,
-                    1 / p.zeta2,
-                    p.f1,
-                    p.f2,
-                    p.phi1,
-                    p.phi2,
-                )
-                y_fit = (
-                    p.k_lf * core + p.C_lf
-                    if ds.tag == "LF"
-                    else p.k_hf * core + p.C_hf
-                )
-                ranges.append(np.ptp(y_fit[mask]))
-            else:
-                ranges.append(np.ptp(ds.ts.s))
-    y_step = 0.8 * max(ranges + [1e-3])
-
-    freq_vs_H: dict[int, list[tuple[int, float, float]]] = {}
-    freq_vs_T: dict[int, list[tuple[int, float, float]]] = {}
-    err_vs_H: dict[int, list[tuple[int, float, float]]] = {}
-    err_vs_T: dict[int, list[tuple[int, float, float]]] = {}
-    for ds_lf, ds_hf in triples_sorted:
-        if ds_lf.fit is None:
-            continue
-        H, T = ds_lf.field_mT, ds_lf.temp_K
-        f1, f2 = sorted((ds_lf.fit.f1 / GHZ, ds_lf.fit.f2 / GHZ))
-        s1, s2 = ds_lf.fit.f1_err / GHZ, ds_lf.fit.f2_err / GHZ
-        freq_vs_H.setdefault(T, []).append((H, f1, f2))
-        freq_vs_T.setdefault(H, []).append((T, f1, f2))
-        err_vs_H.setdefault(T, []).append((H, s1, s2))
-        err_vs_T.setdefault(H, []).append((T, s1, s2))
-
-    freq_vs_H = {T: sorted(v) for T, v in freq_vs_H.items() if len(v) >= 2}
-    freq_vs_T = {H: sorted(v) for H, v in freq_vs_T.items() if len(v) >= 2}
-    err_vs_H = {T: sorted(v) for T, v in err_vs_H.items() if len(v) >= 2}
-    err_vs_T = {H: sorted(v) for H, v in err_vs_T.items() if len(v) >= 2}
-
-    theory_curves = None
-    first_ds = triples_sorted[0][0]
-    if first_ds.root:
-        theory_curves = _load_guess_curves(
-            first_ds.root,
-            first_ds.field_mT,
-            first_ds.temp_K,
-        )
-    theory_label_suffix = "" if use_theory_guess else " (plot only)"
-
-    specs = [[{"type": "xy", "rowspan": 2}, {"type": "xy", "rowspan": 2}, {"type": "xy"}], [None, None, None]]
-
-    if varying == "T":
-        fixed_H = list(all_H)[0]
-        titles = [
-            f"LF signals (H = {fixed_H} mT)",
-            f"HF signals (H = {fixed_H} mT)",
-            f"Frequencies (H = {fixed_H} mT)",
-        ]
-    else:  # varying == "H"
-        fixed_T = list(all_T)[0]
-        titles = [
-            f"LF signals (T = {fixed_T} K)",
-            f"HF signals (T = {fixed_T} K)",
-            f"Frequencies (T = {fixed_T} K)",
-        ]
-
-    fig = make_subplots(
-        rows=2,
-        cols=3,
-        specs=specs,
-        column_widths=[0.34, 0.34, 0.32],
-        horizontal_spacing=0.06,
-        vertical_spacing=0.15,
-        subplot_titles=tuple(titles),
-    )
-
-    for idx, (ds_lf, ds_hf) in enumerate(triples_sorted):
-        shift = (idx + 1) * y_step
-        var_value = key_func(ds_lf)
-        tmin_lf, tmax_lf = ds_lf.ts.t[0] / NS, ds_lf.ts.t[-1] / NS
-        tmin_hf, tmax_hf = ds_hf.ts.t[0] / NS, ds_hf.ts.t[-1] / NS
-
-        for col, (tmin, tmax) in (
-            (1, (tmin_lf, tmax_lf)),
-            (2, (tmin_hf, tmax_hf)),
-        ):
-            fig.add_trace(
-                go.Scattergl(
-                    x=[tmin, tmax],
-                    y=[shift, shift],
-                    line=dict(width=1, color=BASE_CLR),
-                    mode="lines",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ),
-                row=1,
-                col=col,
-            )
-
-        if ds_lf.fit:
-            p = ds_lf.fit
-        y = ds_lf.ts.s + shift
-        y -= p.C_lf if ds_lf.fit else ds_lf.ts.s.mean()
-        fig.add_trace(
-            go.Scattergl(
-                x=ds_lf.ts.t / NS,
-                y=y,
-                line=dict(width=3, color=RAW_CLR),
-                name=f"{varying} = {var_value} {var_label}",
-            ),
-            1,
-            1,
-        )
-
-        if ds_lf.fit:
-            core = _core_signal(
-                ds_lf.ts.t,
-                p.A1,
-                p.A2,
-                1 / p.zeta1,
-                1 / p.zeta2,
-                p.f1,
-                p.f2,
-                p.phi1,
-                p.phi2,
-            )
-            y_fit = p.k_lf * core + shift
-            fig.add_trace(
-                go.Scattergl(
-                    x=ds_lf.ts.t / NS,
-                    y=y_fit,
-                    line=dict(width=2, dash="dash", color=FIT_LF),
-                    name=f"{varying} = {var_value} {var_label}",
-                ),
-                1,
-                1,
-            )
-
-        if ds_hf.fit:
-            p = ds_hf.fit
-        y = ds_hf.ts.s + shift
-        y -= p.C_hf if ds_hf.fit else ds_hf.ts.s.mean()
-        fig.add_trace(
-            go.Scattergl(
-                x=ds_hf.ts.t / NS,
-                y=y,
-                line=dict(width=3, color=RAW_CLR),
-                name=f"{varying} = {var_value} {var_label}",
-            ),
-            1,
-            2,
-        )
-
-        if ds_hf.fit:
-            core = _core_signal(
-                ds_hf.ts.t,
-                p.A1,
-                p.A2,
-                1 / p.zeta1,
-                1 / p.zeta2,
-                p.f1,
-                p.f2,
-                p.phi1,
-                p.phi2,
-            )
-            y_fit = p.k_hf * core + shift
-            fig.add_trace(
-                go.Scattergl(
-                    x=ds_hf.ts.t / NS,
-                    y=y_fit,
-                    line=dict(width=2, dash="dash", color=FIT_HF),
-                    name=f"{varying} = {var_value} {var_label}",
-                ),
-                1,
-                2,
-            )
-
-        fig.add_annotation(
-            x=tmax_lf,
-            y=shift,
-            text=f"{var_value} {var_label}",
-            showarrow=False,
-            xanchor="left",
-            font=dict(size=16),
-            row=1,
-            col=1,
-        )
-        fig.add_annotation(
-            x=tmax_hf,
-            y=shift,
-            text=f"{var_value} {var_label}",
-            showarrow=False,
-            xanchor="left",
-            font=dict(size=16),
-            row=1,
-            col=2,
-        )
-
-    if varying == "T":
-        for H_fix, pts in freq_vs_T.items():
-            T_vals, fLF, fHF = zip(*pts)
-            sLF = [s1 for _, s1, _ in err_vs_T[H_fix]]
-            sHF = [s2 for _, _, s2 in err_vs_T[H_fix]]
-            fig.add_trace(
-                go.Scatter(
-                    x=T_vals,
-                    y=fLF,
-                    mode="markers",
-                    error_y=dict(type="data", array=sLF, visible=True),
-                    line=dict(width=2, color="red"),
-                    marker=dict(size=9),
-                    name=f"f_LF, H = {H_fix} mT",
-                ),
-                row=1,
-                col=3,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=T_vals,
-                    y=fHF,
-                    mode="markers",
-                    error_y=dict(type="data", array=sHF, visible=True),
-                    line=dict(width=2, color="blue"),
-                    marker=dict(size=9),
-                    name=f"f_HF, H = {H_fix} mT",
-                ),
-                row=1,
-                col=3,
-            )
-        fig.update_xaxes(title_text="Temperature (K)", row=1, col=3)
-    else:
-        for T_fix, pts in freq_vs_H.items():
-            H_vals, fLF, fHF = zip(*pts)
-            sLF = [s1 for _, s1, _ in err_vs_H[T_fix]]
-            sHF = [s2 for _, _, s2 in err_vs_H[T_fix]]
-            fig.add_trace(
-                go.Scatter(
-                    x=H_vals,
-                    y=fLF,
-                    mode="markers",
-                    error_y=dict(type="data", array=sLF, visible=True),
-                    line=dict(width=2, color="red"),
-                    marker=dict(size=9),
-                    name=f"f_LF, T = {T_fix} K",
-                ),
-                row=1,
-                col=3,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=H_vals,
-                    y=fHF,
-                    mode="markers",
-                    error_y=dict(type="data", array=sHF, visible=True),
-                    line=dict(width=2, color="blue"),
-                    marker=dict(size=9),
-                    name=f"f_HF, T = {T_fix} K",
-                ),
-                row=1,
-                col=3,
-            )
-        fig.update_xaxes(title_text="Magnetic field (mT)", row=1, col=3)
-    fig.update_yaxes(title_text="Frequency (GHz)", row=1, col=3)
-
-    if theory_curves is not None:
-        axis = theory_curves.axis
-        hf_th = theory_curves.freq_hf
-        lf_th = theory_curves.freq_lf
-        var_vals = [key_func(ds_lf) for ds_lf, _ in triples_sorted]
-        lo, hi = min(var_vals), max(var_vals)
-        mask = (axis >= lo) & (axis <= hi)
-        axis = axis[mask]
-        hf_th = hf_th[mask]
-        lf_th = lf_th[mask]
-        if axis.size:
-            col_idx = 3
-            fig.add_trace(
-                go.Scatter(
-                    x=axis,
-                    y=lf_th,
-                    mode="lines",
-                    line=dict(color="red"),
-                    name=f"LF theory{theory_label_suffix}",
-                ),
-                row=1,
-                col=col_idx,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=axis,
-                    y=hf_th,
-                    mode="lines",
-                    line=dict(color="blue"),
-                    name=f"HF theory{theory_label_suffix}",
-                ),
-                row=1,
-                col=col_idx,
-            )
-
-    fig.update_layout(
-        showlegend=False,
-        hovermode="x unified",
-        font=dict(size=16),
-        width=2000,
-        height=1000,
-        paper_bgcolor="white",
-        plot_bgcolor="white",
-    )
-
-    for annotation in fig["layout"]["annotations"][: len(titles)]:
-        annotation["font"] = dict(size=22)
-
-    fig.update_xaxes(
-        showline=True,
-        linewidth=1,
-        linecolor="black",
-        mirror=True,
-        showticklabels=True,
-        ticks="inside",
-        showgrid=True,
-        gridcolor="#cccccc",
-        gridwidth=1,
-        row=1,
-        col=1,
-        title_text="Time (ns)",
-    )
-    fig.update_xaxes(
-        showline=True,
-        linewidth=1,
-        linecolor="black",
-        mirror=True,
-        showticklabels=True,
-        ticks="inside",
-        showgrid=True,
-        gridcolor="#cccccc",
-        gridwidth=1,
-        row=1,
-        col=2,
-        title_text="Time (ns)",
-    )
-    fig.update_yaxes(
-        range=[0, shift + y_step],
-        showline=True,
-        linewidth=1,
-        linecolor="black",
-        mirror=True,
-        showticklabels=False,
-        row=1,
-        col=1,
-    )
-    fig.update_yaxes(
-        range=[0, shift + y_step],
-        showline=True,
-        linewidth=1,
-        linecolor="black",
-        mirror=True,
-        showticklabels=False,
-        row=1,
-        col=2,
-    )
-    fig.update_xaxes(
-        showline=True,
-        linewidth=1,
-        linecolor="black",
-        mirror=True,
-        showgrid=True,
-        gridcolor="#cccccc",
-        gridwidth=1,
-        row=1,
-        col=3,
-    )
-    fig.update_yaxes(
-        showline=True,
-        linewidth=1,
-        linecolor="black",
-        mirror=True,
-        showgrid=True,
-        gridcolor="#cccccc",
-        gridwidth=1,
-        row=1,
-        col=3,
-    )
-
     fig.update_xaxes(title_font=dict(size=28), tickfont=dict(size=24))
     fig.update_yaxes(title_font=dict(size=28), tickfont=dict(size=24))
 
