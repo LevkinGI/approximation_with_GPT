@@ -12,7 +12,7 @@ from openpyxl.styles import Border, Side, Alignment
 from . import DataSet, GHZ, logger, LOG_PATH
 from .io import load_records
 from .fit import process_pair, process_lf_only
-from .plotting import visualize_without_spectra, visualize_stacked
+from .plotting import visualize_stacked
 
 
 @lru_cache(maxsize=None)
