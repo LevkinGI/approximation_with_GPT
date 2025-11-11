@@ -1,4 +1,3 @@
-%%writefile spectral_pipeline/plotting.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -160,9 +159,6 @@ def visualize_stacked(
             f"LF signals (H = {fixed_H} mT)",
             f"HF signals (H = {fixed_H} mT)",
             f"Spectra (H = {fixed_H} mT)",
-            f"Frequencies (H = {fixed_H} mT)",
-            f"Decay time (H = {fixed_H} mT)",
-            f"Amplitudes (H = {fixed_H} mT)",
         ]
     else:  # varying == "H"
         fixed_T = list(all_T)[0]
@@ -170,9 +166,6 @@ def visualize_stacked(
             f"LF signals (T = {fixed_T} K)",
             f"HF signals (T = {fixed_T} K)",
             f"Spectra (T = {fixed_T} K)",
-            f"Frequencies (T = {fixed_T} K)",
-            f"Decay time (T = {fixed_T} K)",
-            f"Amplitudes (T = {fixed_T} K)",
         ]
 
     fig = make_subplots(
@@ -181,7 +174,8 @@ def visualize_stacked(
         specs=specs,
         column_widths=[0.26, 0.26, 0.26, 0.22],
         horizontal_spacing=0.06,
-        vertical_spacing=0.1,
+        vertical_spacing=0.05,
+        shared_xaxes=True,
         subplot_titles=tuple(titles),
     )
 
@@ -383,7 +377,6 @@ def visualize_stacked(
                 row=1,
                 col=4,
             )
-        fig.update_xaxes(title_text="Temperature (K)", row=1, col=4)
         for H_fix, pts in tau_vs_T.items():
             T_vals, tau_LF, tau_HF = zip(*pts)
             fig.add_trace(
@@ -410,7 +403,6 @@ def visualize_stacked(
                 row=2,
                 col=4,
             )
-        fig.update_xaxes(title_text="Temperature (K)", row=2, col=4)
         for H_fix, pts in amp_vs_T.items():
             T_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
@@ -465,7 +457,6 @@ def visualize_stacked(
                 row=1,
                 col=4,
             )
-        fig.update_xaxes(title_text="Magnetic field (mT)", row=1, col=4)
         for T_fix, pts in tau_vs_H.items():
             H_vals, tau_LF, tau_HF = zip(*pts)
             fig.add_trace(
@@ -492,7 +483,6 @@ def visualize_stacked(
                 row=2,
                 col=4,
             )
-        fig.update_xaxes(title_text="Magnetic field (mT)", row=2, col=4)
         for T_fix, pts in amp_vs_H.items():
             H_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
