@@ -389,7 +389,7 @@ def visualize_stacked(
                 row=1,
                 col=4,
             )
-        for H_fix, pts in phi_vs_T.items():
+        for H_fix, pts in amp_vs_T.items():
             T_vals, tau_LF, tau_HF = zip(*pts)
             fig.add_trace(
                 go.Scatter(
@@ -469,7 +469,7 @@ def visualize_stacked(
                 row=1,
                 col=4,
             )
-        for T_fix, pts in phi_vs_H.items():
+        for T_fix, pts in amp_vs_H.items():
             H_vals, tau_LF, tau_HF = zip(*pts)
             fig.add_trace(
                 go.Scatter(
