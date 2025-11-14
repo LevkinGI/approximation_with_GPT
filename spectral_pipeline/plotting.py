@@ -110,6 +110,10 @@ def visualize_stacked(
     tau_vs_T: dict[int, list[tuple[int, float, float]]] = {}
     amp_vs_H: dict[int, list[tuple[int, float, float]]] = {}
     amp_vs_T: dict[int, list[tuple[int, float, float]]] = {}
+    k_vs_H: dict[int, list[tuple[int, float, float]]] = {}
+    k_vs_T: dict[int, list[tuple[int, float, float]]] = {}
+    phi_vs_H: dict[int, list[tuple[int, float, float]]] = {}
+    phi_vs_T: dict[int, list[tuple[int, float, float]]] = {}
     for ds_lf, ds_hf in triples_sorted:
         if ds_lf.fit is None:
             continue
@@ -123,6 +127,10 @@ def visualize_stacked(
         tau_vs_T.setdefault(H, []).append((T, tau1, tau2))
         amp_vs_H.setdefault(T, []).append((H, ds_lf.fit.A1, ds_lf.fit.A2))
         amp_vs_T.setdefault(H, []).append((T, ds_lf.fit.A1, ds_lf.fit.A2))
+        k_vs_H.setdefault(T, []).append((H, ds_lf.fit.k_lf, ds_lf.fit.k_hf))
+        k_vs_T.setdefault(H, []).append((T, ds_lf.fit.k_lf, ds_lf.fit.k_hf))
+        phi_vs_H.setdefault(T, []).append((H, ds_lf.fit.phi1, ds_lf.fit.phi2))
+        phi_vs_T.setdefault(H, []).append((T, ds_lf.fit.phi1, ds_lf.fit.phi2))
 
     freq_vs_H = {T: sorted(v) for T, v in freq_vs_H.items() if len(v) >= 2}
     freq_vs_T = {H: sorted(v) for H, v in freq_vs_T.items() if len(v) >= 2}
@@ -130,6 +138,10 @@ def visualize_stacked(
     tau_vs_T = {H: sorted(v) for H, v in tau_vs_T.items() if len(v) >= 2}
     amp_vs_H = {T: sorted(v) for T, v in amp_vs_H.items() if len(v) >= 2}
     amp_vs_T = {H: sorted(v) for H, v in amp_vs_T.items() if len(v) >= 2}
+    k_vs_H = {T: sorted(v) for T, v in k_vs_H.items() if len(v) >= 2}
+    k_vs_T = {H: sorted(v) for H, v in k_vs_T.items() if len(v) >= 2}
+    phi_vs_H = {T: sorted(v) for T, v in phi_vs_H.items() if len(v) >= 2}
+    phi_vs_T = {H: sorted(v) for H, v in phi_vs_T.items() if len(v) >= 2}
 
     # теоретические кривые из файлов первого приближения
     theory_curves = None
@@ -377,7 +389,7 @@ def visualize_stacked(
                 row=1,
                 col=4,
             )
-        for H_fix, pts in tau_vs_T.items():
+        for H_fix, pts in phi_vs_T.items():
             T_vals, tau_LF, tau_HF = zip(*pts)
             fig.add_trace(
                 go.Scatter(
@@ -403,7 +415,7 @@ def visualize_stacked(
                 row=2,
                 col=4,
             )
-        for H_fix, pts in amp_vs_T.items():
+        for H_fix, pts in k_vs_T.items():
             T_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
                 go.Scatter(
@@ -457,7 +469,7 @@ def visualize_stacked(
                 row=1,
                 col=4,
             )
-        for T_fix, pts in tau_vs_H.items():
+        for T_fix, pts in phi_vs_H.items():
             H_vals, tau_LF, tau_HF = zip(*pts)
             fig.add_trace(
                 go.Scatter(
@@ -483,7 +495,7 @@ def visualize_stacked(
                 row=2,
                 col=4,
             )
-        for T_fix, pts in amp_vs_H.items():
+        for T_fix, pts in k_vs_H.items():
             H_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
                 go.Scatter(
@@ -515,6 +527,7 @@ def visualize_stacked(
     fig.update_yaxes(title_text="Amplitude", row=3, col=4)
 
     if theory_curves is not None:
+        pass
         axis = theory_curves.axis
         hf_th = theory_curves.freq_hf
         lf_th = theory_curves.freq_lf
