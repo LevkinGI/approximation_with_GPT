@@ -6,7 +6,7 @@ from pathlib import Path
 import math
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, minimize, OptimizeResult, dual_annealing, minimize_scalar
 from scipy.signal import welch, find_peaks, get_window
 
 try:  # pragma: no cover - optional dependency
@@ -595,39 +595,41 @@ def _single_sine_refine(t: NDArray, y: NDArray, f0: float
     return f_est, phi_est, A_est, tau_est
 
 
-def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
-             freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
+def fit_pair(
+    ds_lf: DataSet,
+    ds_hf: DataSet,
+    freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None,
+):
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
-    def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
-        if t.size == 0:
-            return np.ones_like(t)
-        t_min = t.min()
-        t_len = t.max() - t_min
-        if t_len <= 0:
-            return np.ones_like(t)
-        borders = t_min + np.array([1, 2]) * t_len / 3
-        w = np.ones_like(t)
-        w[t >= borders[0]] = 0.8
-        w[t >= borders[1]] = 0.5
-        return w
+    freq_bounds = freq_bounds or (LF_BAND, HF_BAND)
+    freq_lo = np.array([freq_bounds[0][0], freq_bounds[1][0]], dtype=float)
+    freq_hi = np.array([freq_bounds[0][1], freq_bounds[1][1]], dtype=float)
+    freq_init = np.clip(np.array([10.0 * GHZ, 20.0 * GHZ], dtype=float), freq_lo, freq_hi)
 
-    w_lf = _piecewise_time_weights(t_lf)
+    tau_bounds = np.array([[0.1e-9, 5e-9], [0.01e-9, 0.5e-9]], dtype=float)
+    tau_init = np.clip(np.array([0.2e-9, 0.1e-9], dtype=float), tau_bounds[:, 0], tau_bounds[:, 1])
 
-    f1_init = ds_lf.f1_init
-    f2_init = ds_hf.f2_init
-    logger.debug(
-        "Начальные оценки: f1=%.3f ГГц, f2=%.3f ГГц", f1_init/GHZ, f2_init/GHZ)
+    def _initial_amp_phase(t: NDArray, y: NDArray, freq: float) -> tuple[float, float]:
+        if y.size < 3:
+            return 0.0, 0.0
+        try:
+            _, phi_est, amp_est, _ = _single_sine_refine(t, y, freq)
+            amp = float(amp_est) if np.isfinite(amp_est) else 0.0
+            phi = float(phi_est) if np.isfinite(phi_est) else 0.0
+            return amp, phi
+        except Exception as exc:  # pragma: no cover - refinement may fail on degenerate data
+            logger.debug('Single sine refine failed: %s', exc)
+            amp = float(0.5 * np.ptp(y)) if y.size else 0.0
+            return amp, 0.0
 
-    _, phi1_init, A1_init, tau1_init = _single_sine_refine(t_lf, y_lf, f1_init)
-    if ds_lf.zeta1 is None:
-        tau1_lo, tau1_hi = 5e-11, 5e-9
-    else:
-        tau1_init = 1.0 / ds_lf.zeta1
-        tau1_lo, tau1_hi = tau1_init * 0.8, tau1_init * 1.2
-
-    proto_lf_hf = A1_init * np.exp(-t_hf / tau1_init) * np.cos(2 * PI * f1_init * t_hf + phi1_init)
+    A1_init, phi1_init = _initial_amp_phase(t_lf, y_lf, freq_init[0])
+    proto_lf_hf = (
+        A1_init
+        * np.exp(-t_hf / tau_init[0])
+        * np.cos(2 * PI * freq_init[0] * t_hf + phi1_init)
+    )
 
     def _rms(signal: NDArray) -> float:
         if signal.size == 0:
@@ -639,128 +641,314 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     hf_target_amp = _rms(y_hf)
     proto_amp = _rms(proto_lf_hf)
     if proto_amp > 0 and np.isfinite(hf_target_amp):
-        hf_scale = hf_target_amp / proto_amp
-        if not np.isfinite(hf_scale) or hf_scale <= 0:
-            hf_scale = 1.0
-        proto_lf_hf = proto_lf_hf * hf_scale
+        ratio = hf_target_amp / proto_amp
+        if np.isfinite(ratio) and ratio > 0:
+            hf_scale = ratio
+            proto_lf_hf = proto_lf_hf * hf_scale
 
     A1_init *= hf_scale
 
-    _, phi2_init, A2_init, tau2_init = _single_sine_refine(t_hf, y_hf - proto_lf_hf, f2_init)
-    if ds_hf.zeta2 is None:
-        tau2_lo, tau2_hi = 5e-12, 5e-10
-    else:
-        tau2_init = 1.0 / ds_hf.zeta2
-        tau2_lo, tau2_hi = tau2_init * 0.8, tau2_init * 1.2
+    A2_init, phi2_init = _initial_amp_phase(t_hf, y_hf - proto_lf_hf, freq_init[1])
 
-    k_lf_init = 1
-    k_hf_init = 1
-    C_lf_init = np.mean(y_lf)
-    C_hf_init = np.mean(y_hf)
+    k_lf_init = 1.0
+    k_hf_init = 1.0
+    C_lf_init = float(np.mean(y_lf)) if y_lf.size else 0.0
+    C_hf_init = float(np.mean(y_hf)) if y_hf.size else 0.0
 
-    p0 = np.array([
-        k_lf_init, k_hf_init,
-        C_lf_init, C_hf_init,
-        A1_init,    A2_init,
-        tau1_init,  tau2_init,
-        f1_init,    f2_init,
-        phi1_init,  phi2_init
-    ])
-
-    if freq_bounds is None:
-        f1_lo, f1_hi = f1_init * 0.9, f1_init * 1.2
-        f2_lo, f2_hi = f2_init * 0.9, f2_init * 1.2
-    else:
-        (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
-
-    lo = np.array([
-        0.5, 0.5,
-        C_lf_init - np.std(y_lf), C_hf_init - np.std(y_hf),
-        0.0, 0.0,
-        tau1_lo, tau2_lo,
-        f1_lo, f2_lo,
-        -PI, -PI
-    ])
-    hi = np.array([
-        2, 2,
-        C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf),
-        A1_init * 2, A2_init * 2,
-        tau1_hi, tau2_hi,
-        f1_hi, f2_hi,
-        PI, PI
-    ])
-
-    def residuals(p):
-        (k_lf, k_hf, C_lf, C_hf,
-         A1, A2, tau1, tau2,
-         f1_, f2_, phi1_, phi2_) = p
-
-        core_lf = _core_signal(t_lf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        core_hf = _core_signal(t_hf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        res_lf = w_lf * (k_lf * core_lf + C_lf - y_lf)
-        res_hf = k_hf * core_hf + C_hf - y_hf
-
-        # Normalize channel residuals so that the sum of squares corresponds to
-        # the mean squared error for each channel individually.
-        n_lf = y_lf.size
-        n_hf = y_hf.size
-        if n_lf:
-            res_lf = res_lf / math.sqrt(n_lf)
-        if n_hf:
-            res_hf = res_hf / math.sqrt(n_hf)
-
-        return np.concatenate([res_lf, res_hf])
-
-    sol = least_squares(
-        residuals,
-        p0,
-        bounds=(lo, hi),
-        method='trf',
-        ftol=1e-15, xtol=1e-15, gtol=1e-15,
-        max_nfev=100000,
-        loss='soft_l1',
-        f_scale=0.1,
-        x_scale='jac',
-        verbose=0,
+    fast_init = np.array(
+        [k_lf_init, k_hf_init, C_lf_init, C_hf_init, A1_init, A2_init, phi1_init, phi2_init],
+        dtype=float,
     )
-    p = sol.x
-    cost = sol.cost
-    m, n = sol.jac.shape
-    try:
-        cov = np.linalg.inv(sol.jac.T @ sol.jac) * 2 * cost / max(m - n, 1)
-    except np.linalg.LinAlgError:
-        cov = np.full((n, n), np.nan)
 
-    idx_f1 = 8
-    idx_f2 = 9
-    sigma_f1 = math.sqrt(abs(cov[idx_f1, idx_f1]))
-    sigma_f2 = math.sqrt(abs(cov[idx_f2, idx_f2]))
+    std_lf = float(np.std(y_lf)) if y_lf.size else 1.0
+    std_hf = float(np.std(y_hf)) if y_hf.size else 1.0
+    amp_bound_lf = max(abs(A1_init) * 2.0, float(np.ptp(y_lf)) if y_lf.size else 0.0, 1.0)
+    amp_bound_hf = max(abs(A2_init) * 2.0, float(np.ptp(y_hf)) if y_hf.size else 0.0, 1.0)
 
-    (k_lf, k_hf, C_lf, C_hf,
-      A1, A2, tau1, tau2,
-      f1_fin, f2_fin, phi1_fin, phi2_fin) = p
-    logger.debug(
-        "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
-        f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
+    fast_lo = np.array(
+        [
+            0.5,
+            0.5,
+            C_lf_init - std_lf,
+            C_hf_init - std_hf,
+            0.0,
+            0.0,
+            -PI,
+            -PI,
+        ],
+        dtype=float,
+    )
+    fast_hi = np.array(
+        [
+            2.0,
+            2.0,
+            C_lf_init + std_lf,
+            C_hf_init + std_hf,
+            amp_bound_lf,
+            amp_bound_hf,
+            PI,
+            PI,
+        ],
+        dtype=float,
+    )
 
-    return FittingResult(
+    n_lf = y_lf.size
+    n_hf = y_hf.size
+
+    def _fft_peak_in_band(signal: NDArray, fs: float, band: tuple[float, float]) -> float | None:
+        freqs, amps = _fft_spectrum(signal, fs)
+        mask = (freqs >= band[0]) & (freqs <= band[1])
+        if not mask.any():
+            return None
+        sub_freqs = freqs[mask]
+        sub_amps = amps[mask]
+        if sub_amps.size == 0:
+            return None
+        idx = int(np.argmax(sub_amps))
+        return float(sub_freqs[idx])
+
+    def inner_fit(
+        freqs: np.ndarray,
+        taus: np.ndarray,
+        initial_fast: np.ndarray,
+    ) -> tuple[OptimizeResult | None, float]:
+        f1, f2 = float(freqs[0]), float(freqs[1])
+        tau1, tau2 = float(taus[0]), float(taus[1])
+
+        def residuals_inner(params: np.ndarray) -> np.ndarray:
+            k_lf, k_hf, C_lf, C_hf, A1, A2, phi1, phi2 = params
+            core_lf = _core_signal(t_lf, A1, A2, tau1, tau2, f1, f2, phi1, phi2)
+            core_hf = _core_signal(t_hf, A1, A2, tau1, tau2, f1, f2, phi1, phi2)
+            res_lf = k_lf * core_lf + C_lf - y_lf
+            res_hf = k_hf * core_hf + C_hf - y_hf
+            if n_lf:
+                res_lf = res_lf / math.sqrt(n_lf)
+            if n_hf:
+                res_hf = res_hf / math.sqrt(n_hf)
+            return np.concatenate([res_lf, res_hf])
+
+        try:
+            init = np.clip(initial_fast, fast_lo, fast_hi)
+            res = least_squares(
+                residuals_inner,
+                init,
+                bounds=(fast_lo, fast_hi),
+                method="trf",
+                max_nfev=5000,
+                ftol=1e-12,
+                xtol=1e-12,
+                gtol=1e-12,
+            )
+        except Exception as exc:  # pragma: no cover - safeguard against solver issues
+            logger.debug("Внутренняя оптимизация не удалась: %s", exc)
+            return None, math.inf
+
+        mse_sum = 2.0 * res.cost if np.isfinite(res.cost) else math.inf
+        return res, mse_sum
+
+    def optimise_decays(
+        freqs: np.ndarray,
+        tau_seed: np.ndarray,
+        fast_seed: np.ndarray,
+    ) -> dict[str, object] | None:
+        best: dict[str, object] | None = None
+        local_fast = np.array(fast_seed, dtype=float)
+        tau_seed = np.clip(np.array(tau_seed, dtype=float), tau_bounds[:, 0], tau_bounds[:, 1])
+
+        def objective_tau(taus: np.ndarray) -> float:
+            nonlocal best, local_fast
+            if np.any(~np.isfinite(taus)):
+                return math.inf
+            taus = np.clip(taus, tau_bounds[:, 0], tau_bounds[:, 1])
+            res, cost_val = inner_fit(freqs, taus, local_fast)
+            if res is None or not math.isfinite(cost_val):
+                return math.inf
+            local_fast = res.x.copy()
+            snapshot = {
+                "taus": np.array(taus, dtype=float),
+                "fast_params": res.x.copy(),
+                "result": res,
+                "cost": float(cost_val),
+            }
+            if best is None or float(cost_val) < float(best["cost"]):
+                best = snapshot
+            return float(cost_val)
+
+        # Evaluate the seed explicitly to populate ``best`` even if the optimiser
+        # exits immediately (for example, due to zero gradient).
+        objective_tau(tau_seed)
+
+        minimize(
+            objective_tau,
+            x0=tau_seed,
+            method="L-BFGS-B",
+            bounds=[tuple(bound) for bound in tau_bounds],
+            options={"maxiter": 150, "ftol": 1e-12},
+        )
+
+        return best
+
+    best_state: dict[str, object] | None = None
+    freq_cache: dict[tuple[float, float], dict[str, object] | None] = {}
+
+    def objective_freq_raw(freq_vector: np.ndarray) -> float:
+        nonlocal best_state
+        if np.any(~np.isfinite(freq_vector)):
+            return math.inf
+        freqs = np.clip(np.array(freq_vector, dtype=float), freq_lo, freq_hi)
+        if freqs[1] <= freqs[0]:
+            return math.inf
+
+        key = (float(freqs[0]), float(freqs[1]))
+        cached = freq_cache.get(key)
+        if cached is None:
+            cached = optimise_decays(freqs, tau_init, fast_init)
+            freq_cache[key] = cached
+
+        if cached is None:
+            return math.inf
+
+        cost_val = float(cached["cost"])
+        if not math.isfinite(cost_val):
+            return math.inf
+
+        if best_state is None or cost_val < float(best_state["cost"]):
+            best_state = {
+                "freqs": freqs.copy(),
+                **cached,
+            }
+        return cost_val
+
+    def objective_freq(x: np.ndarray) -> float:
+        return objective_freq_raw(np.array(x, dtype=float))
+
+    bounds = list(zip(freq_lo, freq_hi))
+
+    # Evaluate the mandated starting point explicitly to seed caches.
+    objective_freq(freq_init)
+
+    # Global exploration via dual annealing to avoid getting stuck at 10/20 ГГц.
+    anneal_res = dual_annealing(
+        objective_freq,
+        bounds=bounds,
+        x0=freq_init,
+        seed=1234,
+        no_local_search=False,
+        maxiter=40,
+        minimizer_kwargs={
+            "method": "L-BFGS-B",
+            "bounds": bounds,
+            "options": {"maxiter": 60, "ftol": 1e-12},
+        },
+    )
+
+    freq_start = np.clip(np.array(anneal_res.x, dtype=float), freq_lo, freq_hi)
+    candidate_starts = [freq_init, freq_start]
+
+    lf_fft_peak = _fft_peak_in_band(y_lf - np.mean(y_lf), ds_lf.ts.meta.fs, freq_bounds[0])
+    hf_fft_peak = _fft_peak_in_band(y_hf - np.mean(y_hf), ds_hf.ts.meta.fs, freq_bounds[1])
+    if lf_fft_peak is not None and hf_fft_peak is not None:
+        fft_guess = np.array([lf_fft_peak, hf_fft_peak], dtype=float)
+        candidate_starts.append(np.clip(fft_guess, freq_lo, freq_hi))
+
+    # Encourage exploration of high-frequency regions in addition to the mandated
+    # initial guess and the annealing outcome.
+    high_corner = np.array(
+        [
+            freq_lo[0] + 0.75 * (freq_hi[0] - freq_lo[0]),
+            freq_lo[1] + 0.75 * (freq_hi[1] - freq_lo[1]),
+        ],
+        dtype=float,
+    )
+    candidate_starts.append(np.clip(high_corner, freq_lo, freq_hi))
+
+    forced_high = np.array([freq_init[0], min(freq_hi[1], freq_init[1] + 10 * GHZ)], dtype=float)
+    candidate_starts.append(np.clip(forced_high, freq_lo, freq_hi))
+
+    rng = np.random.default_rng(1234)
+    random_lf = rng.uniform(freq_lo[0], freq_hi[0], size=4)
+    random_hf = rng.uniform(freq_lo[1], freq_hi[1], size=4)
+    random_hf = np.maximum(random_hf, random_lf + 0.5 * GHZ)
+    random_hf = np.clip(random_hf, freq_lo[1], freq_hi[1])
+    for lf_seed, hf_seed in zip(random_lf, random_hf):
+        candidate_starts.append(np.array([lf_seed, hf_seed], dtype=float))
+
+    if best_state is None:
+        candidate_starts.insert(0, freq_init)
+
+    for start in candidate_starts:
+        start = np.clip(np.array(start, dtype=float), freq_lo, freq_hi)
+        objective_freq(start)
+        minimize(
+            objective_freq,
+            x0=start,
+            method="L-BFGS-B",
+            bounds=bounds,
+            options={"maxiter": 200, "ftol": 1e-12},
+        )
+
+    if best_state is None:
+        raise RuntimeError("Не удалось подобрать параметры для сигналов")
+
+    # One-dimensional polishing of each frequency with the other fixed.
+    freq_refined = np.array(best_state["freqs"], dtype=float)
+    for idx in range(2):
+        low, high = bounds[idx]
+        if idx == 1:
+            low = max(low, freq_refined[0] + 0.1 * GHZ)
+        else:
+            high = min(high, freq_refined[1] - 0.1 * GHZ)
+        if high <= low:
+            continue
+
+        def scalar_obj(val: float) -> float:
+            vec = freq_refined.copy()
+            vec[idx] = val
+            if idx == 1 and val <= vec[0]:
+                return math.inf
+            return objective_freq(vec)
+
+        res_scalar = minimize_scalar(
+            scalar_obj,
+            bounds=(low, high),
+            method="bounded",
+            options={"xatol": 1e6, "maxiter": 200},
+        )
+        if res_scalar.success and np.isfinite(res_scalar.fun):
+            freq_refined[idx] = float(res_scalar.x)
+            objective_freq(freq_refined)
+
+    best_state = best_state or {}
+    if "freqs" in best_state:
+        best_state["freqs"] = np.array(freq_refined, dtype=float)
+
+    freqs_best = np.array(best_state["freqs"], dtype=float)
+    taus_best = np.array(best_state["taus"], dtype=float)
+    fast_params = np.array(best_state["fast_params"], dtype=float)
+    cost_val = float(best_state["cost"])
+
+    k_lf, k_hf, C_lf, C_hf, A1, A2, phi1, phi2 = fast_params
+    tau1, tau2 = taus_best
+    f1_fin, f2_fin = freqs_best
+
+    fit_result = FittingResult(
         f1=f1_fin,
         f2=f2_fin,
-        zeta1=1/tau1,
-        zeta2=1/tau2,
-        phi1=phi1_fin,
-        phi2=phi2_fin,
+        zeta1=1.0 / tau1 if tau1 else math.inf,
+        zeta2=1.0 / tau2 if tau2 else math.inf,
+        phi1=phi1,
+        phi2=phi2,
         A1=A1,
         A2=A2,
         k_lf=k_lf,
         k_hf=k_hf,
         C_lf=C_lf,
         C_hf=C_hf,
-        f1_err=sigma_f1,
-        f2_err=sigma_f2,
-        cost=cost,
-    ), cost
-
+        f1_err=None,
+        f2_err=None,
+        cost=cost_val,
+    )
+    return fit_result, cost_val
 
 def process_pair(
     ds_lf: DataSet,
@@ -768,455 +956,66 @@ def process_pair(
     *,
     use_theory_guess: bool = True,
 ) -> Optional[FittingResult]:
-    logger.info("Обработка пары T=%d K, H=%d mT", ds_lf.temp_K, ds_lf.field_mT)
-    tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
-    t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
-    t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
+    """Fit an LF/HF pair using the reverse hierarchical search."""
 
-    def _prepare_signals() -> tuple[NDArray, NDArray, float]:
-        """Return LF/HF signals aligned to a common sampling rate."""
-        spec_lf = y_lf - np.mean(y_lf)
-        spec_hf = y_hf - np.mean(y_hf)
-        fs_lf = ds_lf.ts.meta.fs
-        fs_hf = ds_hf.ts.meta.fs
-        if abs(fs_lf - fs_hf) > 1e-9:
-            fs_common = min(fs_lf, fs_hf)
-            t_end = min(t_lf[-1], t_hf[-1])
-            t_common = np.arange(0.0, t_end, 1.0 / fs_common)
-            spec_lf_c = np.interp(t_common, t_lf, spec_lf)
-            spec_hf_c = np.interp(t_common, t_hf, spec_hf)
-        else:
-            fs_common = fs_lf
-            n = min(spec_lf.size, spec_hf.size)
-            spec_lf_c = spec_lf[:n]
-            spec_hf_c = spec_hf[:n]
-        return spec_lf_c, spec_hf_c, fs_common
-
-    def _search_candidates() -> tuple[list[tuple[float, Optional[float]]],
-                                      list[tuple[float, Optional[float]]],
-                                      tuple[tuple[float, float], tuple[float, float]] | None]:
-        f1_rough, phi1, A1, tau1 = _single_sine_refine(t_lf, y_lf, f0=10 * GHZ)
-        proto_lf = A1 * np.exp(-t_hf / tau1) * np.cos(2 * np.pi * f1_rough * t_hf + phi1)
-        residual = y_hf - proto_lf
-        f2_rough, _, _, _ = _single_sine_refine(t_hf, residual, f0=40 * GHZ)
-        logger.debug("Rough estimates: f1=%.3f ГГц, f2=%.3f ГГц",
-                     f1_rough/GHZ, f2_rough/GHZ)
-        spec_lf_c, spec_hf_c, fs_common = _prepare_signals()
-        f_all, zeta_all = multichannel_esprit([spec_lf_c, spec_hf_c], fs_common)
-        mask_hf = (
-            (zeta_all > -5e8)
-            & (HF_BAND[0] <= f_all)
-            & (f_all <= HF_BAND[1])
-            & (np.abs(f_all - f2_rough) <= 7 * GHZ)
-        )
-        logger.debug("ESPRIT HF filtered: %s", np.round(f_all[mask_hf] / GHZ, 3))
-        if not np.any(mask_hf):
-            mask_hf = (HF_BAND[0] <= f_all) & (f_all <= HF_BAND[1])
-            logger.debug("ESPRIT HF relaxed: %s", np.round(f_all[mask_hf] / GHZ, 3))
-        hf_c: list[tuple[float, Optional[float]]] = []
-        if np.any(mask_hf):
-            hf_c.extend(
-                [
-                    (float(f), float(z) if z > 0 else None)
-                    for f, z in zip(f_all[mask_hf], zeta_all[mask_hf])
-                ]
-            )
-        else:
-            logger.warning(
-                f"({ds_hf.temp_K}, {ds_hf.field_mT}): ESPRIT не дал HF-кандидатов"
-            )
-
-        range_hf = (
-            (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ)
-            if f2_rough is not None
-            else HF_BAND
-        )
-        logger.info(
-            "HF fallback range: %.1f–%.1f ГГц",
-            range_hf[0] / GHZ,
-            range_hf[1] / GHZ,
-        )
-        f2_fallback = _fallback_peak(
-            t_hf,
-            y_hf,
-            ds_hf.ts.meta.fs,
-            range_hf,
-            f2_rough if f2_rough is not None else 0.0,
-        )
-        if f2_fallback is not None:
-            if all(abs(f - f2_fallback) >= 20e6 for f, _ in hf_c):
-                hf_c.append((float(f2_fallback), None))
-                logger.info(
-                    "(%d, %d): добавлен HF-кандидат %.3f ГГц методом fallback",
-                    ds_hf.temp_K,
-                    ds_hf.field_mT,
-                    f2_fallback / GHZ,
-                )
-        elif not hf_c:
-            raise RuntimeError("HF-тон не найден")
-        mask_lf = (
-            (zeta_all > 0)
-            & (LF_BAND[0] <= f_all)
-            & (f_all <= LF_BAND[1])
-            & (np.abs(f_all - f1_rough) <= 5 * GHZ)
-        )
-        logger.debug("ESPRIT LF filtered: %s", np.round(f_all[mask_lf] / GHZ, 3))
-        if np.any(mask_lf):
-            lf_c = _top2_nearest(f_all[mask_lf], zeta_all[mask_lf], f1_rough)
-        else:
-            logger.warning(
-                f"({ds_lf.temp_K}, {ds_lf.field_mT}): ESPRIT не дал LF-кандидатов"
-            )
-            lf_c = []
-
-        range_lf = (
-            (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ)
-            if f1_rough is not None
-            else LF_BAND
-        )
-        logger.info(
-            "LF fallback range: %.1f–%.1f ГГц",
-            range_lf[0] / GHZ,
-            range_lf[1] / GHZ,
-        )
-        f1_fallback = _fallback_peak(
-            t_lf,
-            y_lf,
-            ds_lf.ts.meta.fs,
-            range_lf,
-            f1_rough if f1_rough is not None else 0.0,
-            avoid=hf_c[0][0] if hf_c else None,
-        )
-        if f1_fallback is not None:
-            if all(abs(f - f1_fallback) >= 20e6 for f, _ in lf_c):
-                lf_c.append((float(f1_fallback), None))
-                logger.info(
-                    "(%d, %d): добавлен LF-кандидат %.3f ГГц методом fallback",
-                    ds_lf.temp_K,
-                    ds_lf.field_mT,
-                    f1_fallback / GHZ,
-                )
-        elif not lf_c:
-            raise RuntimeError("LF-тон не найден")
-        return lf_c, hf_c, None
-
-    guess = None
-    if use_theory_guess and ds_lf.root:
-        guess = _load_guess(ds_lf.root, ds_lf.field_mT, ds_lf.temp_K)
-
-    if guess is not None:
-        f1_guess, f2_guess = guess
-        logger.info(
-            "(%d, %d): использованы предварительные оценки f1=%.3f ГГц, f2=%.3f ГГц",
-            ds_lf.temp_K, ds_lf.field_mT, f1_guess/GHZ, f2_guess/GHZ)
-        spec_lf_c, spec_hf_c, fs_common = _prepare_signals()
-        f_all, zeta_all = multichannel_esprit([spec_lf_c, spec_hf_c], fs_common)
-        mask_hf = (
-            (zeta_all > -5e8)
-            & (HF_BAND[0] <= f_all)
-            & (f_all <= HF_BAND[1])
-            & (np.abs(f_all - f2_guess) <= 7 * GHZ)
-        )
-        logger.debug("ESPRIT HF filtered: %s", np.round(f_all[mask_hf] / GHZ, 3))
-        if not np.any(mask_hf):
-            mask_hf = (HF_BAND[0] <= f_all) & (f_all <= HF_BAND[1])
-            logger.debug("ESPRIT HF relaxed: %s", np.round(f_all[mask_hf] / GHZ, 3))
-        hf_cand = _top2_nearest(f_all[mask_hf], np.maximum(zeta_all[mask_hf], 0.0), f2_guess) if np.any(mask_hf) else []
-        if not hf_cand:
-            logger.warning(
-                f"({ds_hf.temp_K}, {ds_hf.field_mT}): ESPRIT не дал HF-кандидатов"
-            )
-
-        range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
-        logger.info(
-            "HF fallback range: %.1f–%.1f ГГц",
-            range_hf[0] / GHZ,
-            range_hf[1] / GHZ,
-        )
-        f2_fallback = _fallback_peak(
-            t_hf,
-            y_hf,
-            ds_hf.ts.meta.fs,
-            range_hf,
-            f2_guess,
-        )
-        if f2_fallback is not None and all(
-            abs(f - f2_fallback) >= 20e6 for f, _ in hf_cand
-        ):
-            hf_cand.append((float(f2_fallback), None))
-            logger.info(
-                "(%d, %d): добавлен HF-кандидат %.3f ГГц методом fallback",
-                ds_hf.temp_K,
-                ds_hf.field_mT,
-                f2_fallback / GHZ,
-            )
-        elif not hf_cand:
-            raise RuntimeError("HF-тон не найден")
-        mask_lf = (
-            (zeta_all > 0)
-            & (LF_BAND[0] <= f_all)
-            & (f_all <= LF_BAND[1])
-            & (np.abs(f_all - f1_guess) <= 5 * GHZ)
-        )
-        logger.debug("ESPRIT LF filtered: %s", np.round(f_all[mask_lf] / GHZ, 3))
-        lf_cand = _top2_nearest(f_all[mask_lf], zeta_all[mask_lf], f1_guess) if np.any(mask_lf) else []
-        if not lf_cand:
-            logger.warning(
-                f"({ds_lf.temp_K}, {ds_lf.field_mT}): ESPRIT не дал LF-кандидатов"
-            )
-
-        range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
-        logger.info(
-            "LF fallback range: %.1f–%.1f ГГц",
-            range_lf[0] / GHZ,
-            range_lf[1] / GHZ,
-        )
-        f1_fallback = _fallback_peak(
-            t_lf,
-            y_lf,
-            ds_lf.ts.meta.fs,
-            range_lf,
-            f1_guess,
-            avoid=hf_cand[0][0] if hf_cand else None,
-        )
-        if f1_fallback is not None and all(
-            abs(f - f1_fallback) >= 20e6 for f, _ in lf_cand
-        ):
-            lf_cand.append((float(f1_fallback), None))
-            logger.info(
-                "(%d, %d): добавлен LF-кандидат %.3f ГГц методом fallback",
-                ds_lf.temp_K,
-                ds_lf.field_mT,
-                f1_fallback / GHZ,
-            )
-        elif not lf_cand:
-            raise RuntimeError("LF-тон не найден")
-        def _ensure_guess(cands, freq):
-            for f, _ in cands:
-                if abs(f - freq) < 20e6:
-                    return
-            cands.append((freq, None))
-        _ensure_guess(lf_cand, f1_guess)
-        _ensure_guess(hf_cand, f2_guess)
-        freq_bounds = ((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
-                       (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
-    else:
-        logger.info("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
-        lf_cand, hf_cand, freq_bounds = _search_candidates()
-    fs_hf = 1.0 / float(np.mean(np.diff(t_hf)))
-    fs_lf = 1.0 / float(np.mean(np.diff(t_lf)))
-    freqs_fft, amps_fft = _fft_spectrum(y_hf, fs_hf)
-    ds_hf.freq_fft, ds_hf.asd_fft = freqs_fft, amps_fft
-    ds_lf.freq_fft, ds_lf.asd_fft = _fft_spectrum(y_lf, fs_lf)
-    pk = int(np.argmax(amps_fft))
-    minima = np.where(
-        (np.diff(np.signbit(np.diff(amps_fft))) > 0) & (np.arange(len(amps_fft))[1:-1] > pk)
-    )[0]
-    start_band_HF = freqs_fft[minima[0]]/GHZ if minima.size else 20.0
-    if start_band_HF > 30.0:
-        start_band_HF = 30.0
-
-    if guess is not None:
-        lf_lo = (f1_guess - 5 * GHZ) / GHZ
-        lf_hi = (f1_guess + 5 * GHZ) / GHZ
-        hf_lo = (f2_guess - 5 * GHZ) / GHZ
-        hf_hi = (f2_guess + 5 * GHZ) / GHZ
-        f1_hz = _peak_in_band(freqs_fft, amps_fft, lf_lo, lf_hi)
-        f2_hz = _peak_in_band(freqs_fft, amps_fft, hf_lo, hf_hi)
-        range_lf = f"{lf_lo:.0f}–{lf_hi:.0f}"
-        range_hf = f"{hf_lo:.0f}–{hf_hi:.0f}"
-    else:
-        f1_hz = _peak_in_band(freqs_fft, amps_fft, LF_BAND[0]/GHZ, LF_BAND[1]/GHZ)
-        f2_hz = _peak_in_band(freqs_fft, amps_fft, start_band_HF, HF_BAND[1]/GHZ)
-        range_lf = f"{LF_BAND[0]/GHZ:.0f}–{LF_BAND[1]/GHZ:.0f}"
-        range_hf = f"{start_band_HF:.0f}–{HF_BAND[1]/GHZ:.0f}"
-
-    if f1_hz is not None:
-        logger.info(
-            f"({ds_lf.temp_K}, {ds_lf.field_mT}): найден пик  f1 = {f1_hz/1e9:.1f} ГГц ({range_lf})")
-    else:
-        logger.warning(
-            f"({ds_lf.temp_K}, {ds_lf.field_mT}): в полосе {range_lf} ГГц пиков не найдено")
-    if f2_hz is not None:
-        logger.info(
-            f"({ds_lf.temp_K}, {ds_lf.field_mT}): найден пик  f2 = {f2_hz/1e9:.1f} ГГц ({range_hf})")
-    else:
-        logger.warning(
-            f"({ds_lf.temp_K}, {ds_lf.field_mT}): в полосе {range_hf} ГГц пиков не найдено")
-
-    def _append_unique(target_list, new_freq_hz, *, label: str, source: str) -> bool:
-        if new_freq_hz is None:
-            return False
-        for old_f, _ in target_list:
-            if abs(old_f - new_freq_hz) < 20e6:
-                logger.debug(
-                    "(%d, %d) %s: пропуск кандидата %.3f ГГц из %s (слишком близко к %.3f)",
-                    ds_lf.temp_K,
-                    ds_lf.field_mT,
-                    label,
-                    new_freq_hz / GHZ,
-                    source,
-                    old_f / GHZ,
-                )
-                return False
-        target_list.append((float(new_freq_hz), None))
-        logger.info(
-            "(%d, %d) %s: добавлен кандидат %.3f ГГц (%s)",
-            ds_lf.temp_K,
-            ds_lf.field_mT,
-            label,
-            new_freq_hz / GHZ,
-            source,
-        )
-        return True
-
-    _append_unique(lf_cand, f1_hz, label="LF", source="FFT")
-    _append_unique(hf_cand, f2_hz, label="HF", source="FFT")
-
-    cwt_lf, _ = _cwt_gaussian_candidates(
-        t_lf,
-        y_lf,
-        highcut_GHz=LF_BAND[1] / GHZ,
-        time_cutoffs=None,
-    )
-    _, cwt_hf = _cwt_gaussian_candidates(
-        t_hf,
-        y_hf,
-        highcut_GHz=HF_BAND[1] / GHZ,
-        time_cutoffs=None,
+    logger.info(
+        "Обработка пары T=%d K, H=%d mT (реверсивная аппроксимация)",
+        ds_lf.temp_K,
+        ds_lf.field_mT,
     )
 
-    for freq_hz in cwt_lf:
-        if LF_BAND[0] <= freq_hz <= LF_BAND[1]:
-            _append_unique(lf_cand, freq_hz, label="LF", source="CWT")
-
-    for freq_hz in cwt_hf:
-        if HF_BAND[0] <= freq_hz <= HF_BAND[1]:
-            _append_unique(hf_cand, freq_hz, label="HF", source="CWT")
-
-    logger.info("LF candidates: %s", [(round(f/GHZ,3), z) for f, z in lf_cand])
-    logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f, z in hf_cand])
-
-    seen: set[tuple[float, float]] = set()
-    best_cost = np.inf
-    best_fit = None
-    for f1, z1 in lf_cand:
-        for f2, z2 in hf_cand:
-            if (f1, f2) in seen:
-                continue
-            if freq_bounds is not None:
-                (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
-                if not (f1_lo <= f1 <= f1_hi and f2_lo <= f2 <= f2_hi):
-                    logger.debug(
-                        "Комбинация вне freq_bounds: f1=%.3f ГГц, f2=%.3f ГГц",
-                        f1 / GHZ,
-                        f2 / GHZ,
-                    )
-                    seen.add((f1, f2))
-                    continue
-            ds_lf.f1_init, ds_lf.zeta1 = f1, z1
-            ds_hf.f2_init, ds_hf.zeta2 = f2, z2
-            try:
-                fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
-            except Exception as exc:
-                logger.debug(
-                    "Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s",
-                    f1 / GHZ,
-                    f2 / GHZ,
-                    exc,
-                )
-            else:
-                if cost < best_cost:
-                    best_cost = cost
-                    best_fit = fit
-            finally:
-                seen.add((f1, f2))
-    if best_fit is None and guess is not None:
-        logger.warning("(%d, %d): не удалось аппроксимировать с первым приближением, поиск альтернативы", ds_lf.temp_K, ds_lf.field_mT)
-        lf_cand, hf_cand, freq_bounds = _search_candidates()
-        best_cost = np.inf
-        for f1, z1 in lf_cand:
-            for f2, z2 in hf_cand:
-                if (f1, f2) in seen:
-                    continue
-                if freq_bounds is not None:
-                    (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
-                    if not (f1_lo <= f1 <= f1_hi and f2_lo <= f2 <= f2_hi):
-                        logger.debug(
-                            "Комбинация вне freq_bounds: f1=%.3f ГГц, f2=%.3f ГГц",
-                            f1 / GHZ,
-                            f2 / GHZ,
-                        )
-                        seen.add((f1, f2))
-                        continue
-                ds_lf.f1_init, ds_lf.zeta1 = f1, z1
-                ds_hf.f2_init, ds_hf.zeta2 = f2, z2
-                try:
-                    fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
-                except Exception as exc:
-                    logger.debug(
-                        "Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s",
-                        f1 / GHZ,
-                        f2 / GHZ,
-                        exc,
-                    )
-                else:
-                    if cost < best_cost:
-                        best_cost = cost
-                        best_fit = fit
-                finally:
-                    seen.add((f1, f2))
-
-    if best_fit is None:
-        logger.error("(%d, %d): ни одна комбинация не аппроксимировалась", ds_lf.temp_K, ds_lf.field_mT)
-        raise RuntimeError("Ни одна комбинация не аппроксимировалась")
-    if best_fit.f1 > best_fit.f2:
-        logger.info(
-            "(%d, %d): f1=%.3f ГГц > f2=%.3f ГГц, перестановка",
+    # The new algorithm intentionally ignores legacy candidate enumeration and
+    # relies on the deterministic starting point mandated by the spec.  The
+    # ``use_theory_guess`` flag is kept for API compatibility but no longer
+    # affects the optimisation pipeline.
+    try:
+        fit_result, cost = fit_pair(ds_lf, ds_hf, freq_bounds=(LF_BAND, HF_BAND))
+    except Exception as exc:  # pragma: no cover - propagate meaningful context
+        logger.error(
+            "(%d, %d): реверсивная аппроксимация не удалась: %s",
             ds_lf.temp_K,
             ds_lf.field_mT,
-            best_fit.f1 / GHZ,
-            best_fit.f2 / GHZ,
+            exc,
         )
-        best_fit = FittingResult(
-            f1=best_fit.f2,
-            f2=best_fit.f1,
-            zeta1=best_fit.zeta2,
-            zeta2=best_fit.zeta1,
-            phi1=best_fit.phi2,
-            phi2=best_fit.phi1,
-            A1=best_fit.A2,
-            A2=best_fit.A1,
-            k_lf=best_fit.k_lf,
-            k_hf=best_fit.k_hf,
-            C_lf=best_fit.C_lf,
-            C_hf=best_fit.C_hf,
-            f1_err=best_fit.f2_err,
-            f2_err=best_fit.f1_err,
-            cost=best_fit.cost,
+        raise
+
+    if not math.isfinite(cost):
+        logger.error(
+            "(%d, %d): получена нечисловая ошибка аппроксимации",
+            ds_lf.temp_K,
+            ds_lf.field_mT,
         )
-    if best_fit.cost is not None and best_fit.cost > MAX_COST:
+        raise RuntimeError("Итоговая ошибка аппроксимации нечисловая")
+
+    if fit_result.cost is None:
+        fit_result = FittingResult(
+            **{
+                **fit_result.__dict__,
+                "cost": float(cost),
+            }
+        )
+
+    if fit_result.cost is not None and fit_result.cost > MAX_COST:
         logger.warning(
-            "(%d, %d): аппроксимация отклонена f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
+            "(%d, %d): аппроксимация отклонена, cost=%.3e превышает порог",
             ds_lf.temp_K,
             ds_lf.field_mT,
-            best_fit.f1 / GHZ,
-            best_fit.f2 / GHZ,
-            best_fit.cost,
+            fit_result.cost,
         )
         ds_lf.fit = ds_hf.fit = None
         return None
-    else:
-        ds_lf.fit = ds_hf.fit = best_fit
-        logger.info(
-            "(%d, %d): аппроксимация успешна f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
-            ds_lf.temp_K,
-            ds_lf.field_mT,
-            best_fit.f1 / GHZ,
-            best_fit.f2 / GHZ,
-            best_fit.cost,
-        )
-        return best_fit
+
+    ds_lf.fit = ds_hf.fit = fit_result
+    logger.info(
+        "(%d, %d): аппроксимация завершена f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
+        ds_lf.temp_K,
+        ds_lf.field_mT,
+        fit_result.f1 / GHZ,
+        fit_result.f2 / GHZ,
+        fit_result.cost,
+    )
+    return fit_result
+
 
 
 def fit_single(ds: DataSet,
