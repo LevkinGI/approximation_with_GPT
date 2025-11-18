@@ -114,6 +114,8 @@ def visualize_stacked(
     k_vs_T: dict[int, list[tuple[int, float, float]]] = {}
     phi_vs_H: dict[int, list[tuple[int, float, float]]] = {}
     phi_vs_T: dict[int, list[tuple[int, float, float]]] = {}
+    C_vs_H: dict[int, list[tuple[int, float, float]]] = {}
+    C_vs_T: dict[int, list[tuple[int, float, float]]] = {}
     for ds_lf, ds_hf in triples_sorted:
         if ds_lf.fit is None:
             continue
@@ -131,6 +133,8 @@ def visualize_stacked(
         k_vs_T.setdefault(H, []).append((T, ds_lf.fit.k_lf, ds_lf.fit.k_hf))
         phi_vs_H.setdefault(T, []).append((H, ds_lf.fit.phi1, ds_lf.fit.phi2))
         phi_vs_T.setdefault(H, []).append((T, ds_lf.fit.phi1, ds_lf.fit.phi2))
+        C_vs_H.setdefault(T, []).append((H, ds_lf.fit.C_lf, ds_lf.fit.C_hf))
+        C_vs_T.setdefault(H, []).append((T, ds_lf.fit.C_lf, ds_lf.fit.C_hf))
 
     freq_vs_H = {T: sorted(v) for T, v in freq_vs_H.items() if len(v) >= 2}
     freq_vs_T = {H: sorted(v) for H, v in freq_vs_T.items() if len(v) >= 2}
@@ -142,6 +146,8 @@ def visualize_stacked(
     k_vs_T = {H: sorted(v) for H, v in k_vs_T.items() if len(v) >= 2}
     phi_vs_H = {T: sorted(v) for T, v in phi_vs_H.items() if len(v) >= 2}
     phi_vs_T = {H: sorted(v) for H, v in phi_vs_T.items() if len(v) >= 2}
+    C_vs_H = {T: sorted(v) for T, v in phi_vs_H.items() if len(v) >= 2}
+    C_vs_T = {H: sorted(v) for H, v in phi_vs_T.items() if len(v) >= 2}
 
     # теоретические кривые из файлов первого приближения
     theory_curves = None
@@ -415,7 +421,7 @@ def visualize_stacked(
                 row=2,
                 col=4,
             )
-        for H_fix, pts in amp_vs_T.items():
+        for H_fix, pts in C_vs_T.items():
             T_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
                 go.Scatter(
@@ -495,7 +501,7 @@ def visualize_stacked(
                 row=2,
                 col=4,
             )
-        for T_fix, pts in amp_vs_H.items():
+        for T_fix, pts in C_vs_H.items():
             H_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
                 go.Scatter(
