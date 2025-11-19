@@ -7,9 +7,10 @@ from functools import lru_cache
 
 import numpy as np
 import pandas as pd
-from openpyxl.styles import Border, Side, Alignment
+from openpyxl.styles import Alignment
+from openpyxl.utils import get_column_letter
 
-from . import DataSet, GHZ, logger, LOG_PATH
+from . import DataSet, GHZ, logger, LOG_PATH, NS
 from .io import load_records
 from .fit import process_pair, process_lf_only
 from .plotting import visualize_stacked
@@ -45,37 +46,100 @@ def _find_crossing(root: str, field_mT: int, temp_K: int):
 
 def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
                        outfile: Path | None = None) -> None:
-    logger.info("Экспорт таблиц частот")
-    recs = []
-    for lf, hf in triples:
-        if lf.fit is None:
-            continue
-        H, T = lf.field_mT, lf.temp_K
-        f1, f2 = lf.fit.f1/GHZ, lf.fit.f2/GHZ
-        recs.append(dict(H=H, T=T, LF=f1, HF=f2))
-    if not recs:
-        logger.warning("Нет данных для экспорта таблиц")
+    """Экспорт параметров аппроксимации в Excel."""
+
+    logger.info("Экспорт таблицы параметров аппроксимации")
+
+    def _tau_ns(zeta: float) -> float:
+        if not np.isfinite(zeta) or zeta == 0.0:
+            return float("nan")
+        tau = 1.0 / zeta
+        if not np.isfinite(tau) or tau <= 0.0:
+            return float("nan")
+        return tau / NS
+
+    lf_list = [lf for lf, _ in triples if lf.fit is not None]
+
+    if not lf_list:
+        logger.warning("Нет данных для экспорта таблицы")
         return
-    df = (
-        pd.DataFrame(recs)
-          .drop_duplicates(subset=["H", "T"], keep="first")
-    )
-    tab_LF = df.pivot(index="T", columns="H", values="LF").sort_index()
-    tab_HF = df.pivot(index="T", columns="H", values="HF").sort_index()
+    unique_H = sorted({ds.field_mT for ds in lf_list})
+    unique_T = sorted({ds.temp_K for ds in lf_list})
+
+    axis: str
+    axis_unit: str
+    axis_values: List[int]
+    if len(unique_H) > 1 and len(unique_T) == 1:
+        axis = "H"
+        axis_unit = "мТл"
+        axis_values = unique_H
+    elif len(unique_T) > 1 and len(unique_H) == 1:
+        axis = "T"
+        axis_unit = "K"
+        axis_values = unique_T
+    else:
+        axis = "H"
+        axis_unit = "мТл"
+        axis_values = unique_H if unique_H else unique_T
+
+    axis_map: dict[int, DataSet] = {}
+    for lf in lf_list:
+        key = lf.field_mT if axis == "H" else lf.temp_K
+        if key not in axis_map:
+            axis_map[key] = lf
+
+    if not axis_values:
+        axis_values = sorted(axis_map.keys())
+
+    axis_values = [val for val in axis_values if val in axis_map]
+    if not axis_values:
+        logger.warning("Нет данных для выбранной оси")
+        return
+
+    param_defs = [
+        ("Частота НЧ, ГГц", lambda fit: fit.f1 / GHZ),
+        ("Частота ВЧ, ГГц", lambda fit: fit.f2 / GHZ),
+        ("Время затухания НЧ, нс", lambda fit: _tau_ns(fit.zeta1)),
+        ("Время затухания ВЧ, нс", lambda fit: _tau_ns(fit.zeta2)),
+        ("Начальная фаза НЧ, рад", lambda fit: fit.phi1),
+        ("Начальная фаза ВЧ, рад", lambda fit: fit.phi2),
+        ("Амплитуда НЧ, отн. ед.", lambda fit: fit.A1),
+        ("Амплитуда ВЧ, отн. ед.", lambda fit: fit.A2),
+        ("k НЧ", lambda fit: fit.k_lf),
+        ("k ВЧ", lambda fit: fit.k_hf),
+        ("Константа НЧ", lambda fit: fit.C_lf),
+        ("Константа ВЧ", lambda fit: fit.C_hf),
+    ]
+
+    data = {}
+    for value in axis_values:
+        fit = axis_map[value].fit
+        if fit is None:
+            continue
+        column_label = f"{axis}={value:g} {axis_unit}"
+        data[column_label] = [func(fit) for _, func in param_defs]
+
+    if not data:
+        logger.warning("Параметры аппроксимации отсутствуют")
+        return
+
+    df = pd.DataFrame(data, index=[name for name, _ in param_defs])
+    df.index.name = "Величина, размерность"
+
     out_path = outfile if outfile else root / f"frequencies_({root.name}).xlsx"
     try:
         with pd.ExcelWriter(out_path, engine="openpyxl") as xls:
-            tab_LF.to_excel(xls, sheet_name="LF", index=True, header=True)
-            tab_HF.to_excel(xls, sheet_name="HF", index=True, header=True)
-            for ws in xls.book.worksheets:
-                cell = ws["A1"]
-                cell.value = "H, mT\nT, K"
-                cell.alignment = Alignment(wrapText=True, horizontal="center", vertical="center")
-                thin = Side(style="thin")
-                cell.border = Border(diagonal=thin, diagonalDown=True)
-                ws.column_dimensions["A"].width = 12
-                ws.row_dimensions[1].height = 30
-        logger.info("Таблицы сохранены в %s", out_path)
+            sheet_name = "Parameters"
+            df.to_excel(xls, sheet_name=sheet_name)
+            ws = xls.book[sheet_name]
+            cell = ws["A1"]
+            cell.value = "Величина, размерность"
+            cell.alignment = Alignment(wrapText=True, horizontal="center", vertical="center")
+            ws.column_dimensions["A"].width = 28
+            for idx in range(2, len(df.columns) + 2):
+                col_letter = get_column_letter(idx)
+                ws.column_dimensions[col_letter].width = 20
+        logger.info("Таблица параметров сохранена в %s", out_path)
     except Exception as exc:
         logger.error("Не удалось сохранить %s: %s", out_path, exc)
         return
