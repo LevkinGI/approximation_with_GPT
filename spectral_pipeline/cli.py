@@ -67,19 +67,15 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
     unique_T = sorted({ds.temp_K for ds in lf_list})
 
     axis: str
-    axis_unit: str
     axis_values: List[int]
     if len(unique_H) > 1 and len(unique_T) == 1:
         axis = "H"
-        axis_unit = "мТл"
         axis_values = unique_H
     elif len(unique_T) > 1 and len(unique_H) == 1:
         axis = "T"
-        axis_unit = "K"
         axis_values = unique_T
     else:
         axis = "H"
-        axis_unit = "мТл"
         axis_values = unique_H if unique_H else unique_T
 
     axis_map: dict[int, DataSet] = {}
@@ -95,6 +91,8 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
     if not axis_values:
         logger.warning("Нет данных для выбранной оси")
         return
+
+    axis_title = "Магнитное поле, мТл" if axis == "H" else "Температура, К"
 
     param_defs = [
         ("Частота НЧ, ГГц", lambda fit: fit.f1 / GHZ),
@@ -116,7 +114,7 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
         fit = axis_map[value].fit
         if fit is None:
             continue
-        column_label = f"{axis}={value:g} {axis_unit}"
+        column_label = f"{value:g}"
         data[column_label] = [func(fit) for _, func in param_defs]
 
     if not data:
@@ -124,7 +122,7 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
         return
 
     df = pd.DataFrame(data, index=[name for name, _ in param_defs])
-    df.index.name = "Величина, размерность"
+    df.index.name = axis_title
 
     out_path = outfile if outfile else root / f"frequencies_({root.name}).xlsx"
     try:
@@ -133,7 +131,7 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
             df.to_excel(xls, sheet_name=sheet_name)
             ws = xls.book[sheet_name]
             cell = ws["A1"]
-            cell.value = "Величина, размерность"
+            cell.value = axis_title
             cell.alignment = Alignment(wrapText=True, horizontal="center", vertical="center")
             ws.column_dimensions["A"].width = 28
             for idx in range(2, len(df.columns) + 2):
