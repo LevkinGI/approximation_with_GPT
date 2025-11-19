@@ -421,7 +421,7 @@ def visualize_stacked(
                 row=2,
                 col=4,
             )
-        for H_fix, pts in C_vs_T.items():
+        for H_fix, pts in amp_vs_T.items():
             T_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
                 go.Scatter(
@@ -501,7 +501,7 @@ def visualize_stacked(
                 row=2,
                 col=4,
             )
-        for T_fix, pts in C_vs_H.items():
+        for T_fix, pts in amp_vs_H.items():
             H_vals, amp_LF, amp_HF = zip(*pts)
             fig.add_trace(
                 go.Scatter(
