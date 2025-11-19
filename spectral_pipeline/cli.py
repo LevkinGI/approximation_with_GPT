@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from openpyxl.styles import Border, Side, Alignment
 
-from . import DataSet, GHZ, logger, LOG_PATH
+from . import DataSet, GHZ, NS, logger, LOG_PATH
 from .io import load_records
 from .fit import process_pair, process_lf_only
 from .plotting import visualize_stacked
@@ -43,42 +43,109 @@ def _find_crossing(root: str, field_mT: int, temp_K: int):
     return None
 
 
+_PARAM_ROWS = (
+    ("Частота НЧ, ГГц", lambda fit: fit.f1 / GHZ),
+    ("Частота ВЧ, ГГц", lambda fit: fit.f2 / GHZ),
+    (
+        "Время затухания НЧ, нс",
+        lambda fit: (1.0 / fit.zeta1) / NS if fit.zeta1 else np.nan,
+    ),
+    (
+        "Время затухания ВЧ, нс",
+        lambda fit: (1.0 / fit.zeta2) / NS if fit.zeta2 else np.nan,
+    ),
+    ("Начальная фаза НЧ, рад", lambda fit: fit.phi1),
+    ("Начальная фаза ВЧ, рад", lambda fit: fit.phi2),
+    ("Амплитуда НЧ", lambda fit: fit.A1),
+    ("Амплитуда ВЧ", lambda fit: fit.A2),
+    ("k НЧ", lambda fit: fit.k_lf),
+    ("k ВЧ", lambda fit: fit.k_hf),
+    ("Константа НЧ", lambda fit: fit.C_lf),
+    ("Константа ВЧ", lambda fit: fit.C_hf),
+)
+
+
+def _prepare_axis(recs: List[dict]):
+    fields = sorted({rec["H"] for rec in recs})
+    temps = sorted({rec["T"] for rec in recs})
+    axis_type = "H"
+    axis_label = "H"
+    axis_unit = "mT"
+    if len(temps) > len(fields):
+        axis_type = "T"
+        axis_label = "T"
+        axis_unit = "K"
+    elif len(temps) == len(fields) and len(temps) > 1:
+        axis_type = "H"
+    grouped: Dict[int, List[dict]] = {}
+    key_name = "H" if axis_type == "H" else "T"
+    other_name = "T" if axis_type == "H" else "H"
+    for rec in recs:
+        key = rec[key_name]
+        grouped.setdefault(key, []).append(rec)
+    selected: Dict[int, dict] = {}
+    for key, rows in grouped.items():
+        selected[key] = rows[0]
+        if len(rows) > 1:
+            others = sorted({row[other_name] for row in rows})
+            logger.warning(
+                "Для %s=%s найдено %d записей с разными %s: %s. Используется первая.",
+                key_name, key, len(rows), other_name, others,
+            )
+    axis_values = sorted(selected.keys())
+    return axis_label, axis_unit, axis_values, selected
+
+
 def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
                        outfile: Path | None = None) -> None:
-    logger.info("Экспорт таблиц частот")
+    logger.info("Экспорт таблицы параметров аппроксимации")
     recs = []
-    for lf, hf in triples:
+    for lf, _ in triples:
         if lf.fit is None:
             continue
-        H, T = lf.field_mT, lf.temp_K
-        f1, f2 = lf.fit.f1/GHZ, lf.fit.f2/GHZ
-        recs.append(dict(H=H, T=T, LF=f1, HF=f2))
+        recs.append({
+            "H": lf.field_mT,
+            "T": lf.temp_K,
+            "fit": lf.fit,
+        })
     if not recs:
-        logger.warning("Нет данных для экспорта таблиц")
+        logger.warning("Нет данных для экспорта таблицы")
         return
-    df = (
-        pd.DataFrame(recs)
-          .drop_duplicates(subset=["H", "T"], keep="first")
-    )
-    tab_LF = df.pivot(index="T", columns="H", values="LF").sort_index()
-    tab_HF = df.pivot(index="T", columns="H", values="HF").sort_index()
-    out_path = outfile if outfile else root / f"frequencies_({root.name}).xlsx"
+    axis_label, axis_unit, axis_vals, selected = _prepare_axis(recs)
+    if not axis_vals:
+        logger.warning("Нет данных после группировки для экспорта таблицы")
+        return
+    data = {}
+    for val in axis_vals:
+        fit = selected[val]["fit"] if val in selected else None
+        col = []
+        for _, fn in _PARAM_ROWS:
+            if fit is None:
+                col.append(np.nan)
+            else:
+                try:
+                    col.append(fn(fit))
+                except Exception:
+                    col.append(np.nan)
+        data[val] = col
+    df = pd.DataFrame(data, index=[name for name, _ in _PARAM_ROWS])
+    df.index.name = f"{axis_label}, {axis_unit}"
+    sheet_name = "parameters"
+    out_path = outfile if outfile else root / f"approximation_({root.name}).xlsx"
     try:
         with pd.ExcelWriter(out_path, engine="openpyxl") as xls:
-            tab_LF.to_excel(xls, sheet_name="LF", index=True, header=True)
-            tab_HF.to_excel(xls, sheet_name="HF", index=True, header=True)
-            for ws in xls.book.worksheets:
-                cell = ws["A1"]
-                cell.value = "H, mT\nT, K"
-                cell.alignment = Alignment(wrapText=True, horizontal="center", vertical="center")
-                thin = Side(style="thin")
-                cell.border = Border(diagonal=thin, diagonalDown=True)
-                ws.column_dimensions["A"].width = 12
-                ws.row_dimensions[1].height = 30
-        logger.info("Таблицы сохранены в %s", out_path)
+            df.to_excel(xls, sheet_name=sheet_name, index=True, header=True)
+            ws = xls.book[sheet_name]
+            cell = ws["A1"]
+            cell.value = f"{axis_label}, {axis_unit}"
+            cell.alignment = Alignment(wrapText=True, horizontal="center", vertical="center")
+            thin = Side(style="thin")
+            cell.border = Border(diagonal=thin, diagonalDown=True)
+            ws.column_dimensions["A"].width = 25
+            ws.row_dimensions[1].height = 30
+        logger.info("Таблица сохранена в %s", out_path)
     except Exception as exc:
         logger.error("Не удалось сохранить %s: %s", out_path, exc)
-        return
 
 
 def main(
