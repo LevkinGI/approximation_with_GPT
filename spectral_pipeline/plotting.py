@@ -217,9 +217,13 @@ def visualize_stacked(
                 col=col,
             )
 
+        noise_lf = getattr(ds_lf.ts, "noise", None)
+        noise_term_lf = 0.0
         if ds_lf.fit:
             p = ds_lf.fit
-        y = ds_lf.ts.s + shift
+            if noise_lf is not None and noise_lf.size == ds_lf.ts.s.size:
+                noise_term_lf = (p.noise_mult_lf or 0.0) * noise_lf + (p.noise_add_lf or 0.0)
+        y = ds_lf.ts.s - noise_term_lf + shift
         y -= p.C_lf if ds_lf.fit else ds_lf.ts.s.mean()
         fig.add_trace(
             go.Scattergl(
@@ -282,9 +286,13 @@ def visualize_stacked(
                 1,
             )
 
+        noise_hf = getattr(ds_hf.ts, "noise", None)
+        noise_term_hf = 0.0
         if ds_hf.fit:
             p = ds_hf.fit
-        y = ds_hf.ts.s + shift
+            if noise_hf is not None and noise_hf.size == ds_hf.ts.s.size:
+                noise_term_hf = (p.noise_mult_hf or 0.0) * noise_hf + (p.noise_add_hf or 0.0)
+        y = ds_hf.ts.s - noise_term_hf + shift
         y -= p.C_hf if ds_hf.fit else ds_hf.ts.s.mean()
         fig.add_trace(
             go.Scattergl(

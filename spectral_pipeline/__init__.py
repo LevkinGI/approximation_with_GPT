@@ -65,6 +65,10 @@ class FittingResult:
     k_hf: float
     C_lf: float
     C_hf: float
+    noise_mult_lf: float | None = None
+    noise_add_lf: float | None = None
+    noise_mult_hf: float | None = None
+    noise_add_hf: float | None = None
     f1_err: float | None = None
     f2_err: float | None = None
     cost: float | None = None

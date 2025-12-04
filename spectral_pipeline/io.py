@@ -8,6 +8,34 @@ import numpy as np
 from . import DataSet, TimeSeries, RecordMeta, logger, GHZ, C_M_S
 
 
+def _soft_lowpass(signal: np.ndarray, fs: float, cutoff: float = 100e9,
+                  transition: float = 5e9) -> np.ndarray:
+    """Apply a near-rectangular low-pass filter with a cosine taper.
+
+    Frequencies above ``cutoff`` are suppressed with a cosine roll-off of
+    width ``transition`` to avoid ringing.
+    """
+
+    if signal.size == 0:
+        return signal
+
+    spectrum = np.fft.rfft(signal)
+    freqs = np.fft.rfftfreq(signal.size, d=1.0 / fs)
+
+    if transition <= 0:
+        transition = cutoff * 0.05
+
+    trans_lo = max(0.0, cutoff - transition)
+    trans_hi = cutoff + transition
+
+    window = np.ones_like(freqs)
+    window[freqs >= trans_hi] = 0.0
+    in_trans = (freqs > trans_lo) & (freqs < trans_hi)
+    window[in_trans] = 0.5 * (1 + np.cos(np.pi * (freqs[in_trans] - trans_lo) / transition))
+
+    return np.fft.irfft(spectrum * window, n=signal.size)
+
+
 def load_records(root: Path) -> List[DataSet]:
     """Читает все *.dat файлы в каталоге *root* (или *root/data*)
     и возвращает список DataSet."""
@@ -58,6 +86,11 @@ def load_records(root: Path) -> List[DataSet]:
             logger.warning("Пропуск %s: некорректный шаг dt", path.name)
             continue
         fs = 1.0 / dt
+
+        # мягкий срез частот выше 100 ГГц в обоих сигналах
+        s = _soft_lowpass(s, fs)
+        noise = _soft_lowpass(noise, fs)
+
         ts = TimeSeries(t=t, s=s, meta=RecordMeta(fs=fs), noise=noise)
         datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag,
                                ts=ts, root=data_dir))
