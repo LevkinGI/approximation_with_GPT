@@ -22,14 +22,22 @@ def load_records(root: Path) -> List[DataSet]:
             continue
         field_mT, temp_K, tag = int(m.group(1)), int(m.group(2)), m.group(3).upper()
         try:
-            data = np.loadtxt(path, usecols=(0, 1))
+            data = np.loadtxt(path, usecols=(0, 1, 2))
         except Exception as exc:
             logger.warning("Невозможно прочитать %s: %s", path.name, exc)
             continue
-        if data.ndim != 2 or data.shape[1] != 2 or data.size < 10:
+        if data.ndim != 2 or data.shape[1] != 3 or data.size < 15:
             logger.warning("Пропуск %s: неверный формат/мало точек", path.name)
             continue
-        x, s = data[:, 0], data[:, 1]
+        x, s_raw, noise = data[:, 0], data[:, 1], data[:, 2]
+        design = np.column_stack((noise, np.ones_like(noise)))
+        try:
+            coef, *_ = np.linalg.lstsq(design, s_raw, rcond=None)
+            mult, add = float(coef[0]), float(coef[1])
+        except Exception as exc:
+            logger.warning("Не удалось оценить шум для %s: %s", path.name, exc)
+            continue
+        s = s_raw - (mult * noise + add)
         x0 = x[np.argmax(s)]
         t_all = 2.0 * (x - x0) / C_M_S  # секунды
 
