@@ -658,13 +658,39 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     C_lf_init = np.mean(y_lf)
     C_hf_init = np.mean(y_hf)
 
+    noise_lf = getattr(ds_lf.ts, "noise", None)
+    if noise_lf is not None and noise_lf.size == y_lf.size:
+        design_lf = np.column_stack((noise_lf, np.ones_like(noise_lf)))
+        try:
+            coef_lf, *_ = np.linalg.lstsq(design_lf, y_lf, rcond=None)
+            noise_mult_lf_init, noise_add_lf_init = float(coef_lf[0]), float(coef_lf[1])
+        except Exception:
+            noise_mult_lf_init, noise_add_lf_init = 0.0, 0.0
+    else:
+        noise_lf = None
+        noise_mult_lf_init, noise_add_lf_init = 0.0, 0.0
+
+    noise_hf = getattr(ds_hf.ts, "noise", None)
+    if noise_hf is not None and noise_hf.size == y_hf.size:
+        design_hf = np.column_stack((noise_hf, np.ones_like(noise_hf)))
+        try:
+            coef_hf, *_ = np.linalg.lstsq(design_hf, y_hf, rcond=None)
+            noise_mult_hf_init, noise_add_hf_init = float(coef_hf[0]), float(coef_hf[1])
+        except Exception:
+            noise_mult_hf_init, noise_add_hf_init = 0.0, 0.0
+    else:
+        noise_hf = None
+        noise_mult_hf_init, noise_add_hf_init = 0.0, 0.0
+
     p0 = np.array([
         k_lf_init, k_hf_init,
         C_lf_init, C_hf_init,
         A1_init,    A2_init,
         tau1_init,  tau2_init,
         f1_init,    f2_init,
-        phi1_init,  phi2_init
+        phi1_init,  phi2_init,
+        noise_mult_lf_init, noise_add_lf_init,
+        noise_mult_hf_init, noise_add_hf_init,
     ])
 
     if freq_bounds is None:
@@ -679,7 +705,11 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         0.0, 0.0,
         tau1_lo, tau2_lo,
         f1_lo, f2_lo,
-        -PI, -PI
+        -PI, -PI,
+        -5.0 if noise_lf is not None else 0.0,
+        (np.mean(y_lf) - 5 * np.std(y_lf)) if noise_lf is not None else 0.0,
+        -5.0 if noise_hf is not None else 0.0,
+        (np.mean(y_hf) - 5 * np.std(y_hf)) if noise_hf is not None else 0.0,
     ])
     hi = np.array([
         2, 2,
@@ -687,18 +717,26 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         A1_init * 2, A2_init * 2,
         tau1_hi, tau2_hi,
         f1_hi, f2_hi,
-        PI, PI
+        PI, PI,
+        5.0 if noise_lf is not None else 0.0,
+        (np.mean(y_lf) + 5 * np.std(y_lf)) if noise_lf is not None else 0.0,
+        5.0 if noise_hf is not None else 0.0,
+        (np.mean(y_hf) + 5 * np.std(y_hf)) if noise_hf is not None else 0.0,
     ])
 
     def residuals(p):
         (k_lf, k_hf, C_lf, C_hf,
          A1, A2, tau1, tau2,
-         f1_, f2_, phi1_, phi2_) = p
+         f1_, f2_, phi1_, phi2_,
+         noise_mult_lf, noise_add_lf,
+         noise_mult_hf, noise_add_hf) = p
 
         core_lf = _core_signal(t_lf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
         core_hf = _core_signal(t_hf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        res_lf = w_lf * (k_lf * core_lf + C_lf - y_lf)
-        res_hf = k_hf * core_hf + C_hf - y_hf
+        noise_term_lf = noise_mult_lf * noise_lf + noise_add_lf if noise_lf is not None else 0.0
+        noise_term_hf = noise_mult_hf * noise_hf + noise_add_hf if noise_hf is not None else 0.0
+        res_lf = w_lf * (k_lf * core_lf + C_lf + noise_term_lf - y_lf)
+        res_hf = k_hf * core_hf + C_hf + noise_term_hf - y_hf
 
         # Normalize channel residuals so that the sum of squares corresponds to
         # the mean squared error for each channel individually.
@@ -738,7 +776,8 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     (k_lf, k_hf, C_lf, C_hf,
       A1, A2, tau1, tau2,
-      f1_fin, f2_fin, phi1_fin, phi2_fin) = p
+      f1_fin, f2_fin, phi1_fin, phi2_fin,
+      _, _, _, _) = p
     logger.debug(
         "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
         f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
@@ -1263,6 +1302,18 @@ def fit_single(ds: DataSet,
 
     k_init = 1.0
     C_init = np.mean(y)
+    noise = getattr(ds.ts, "noise", None)
+    if noise is not None and noise.size == y.size:
+        design = np.column_stack((noise, np.ones_like(noise)))
+        try:
+            coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+            noise_mult_init, noise_add_init = float(coef[0]), float(coef[1])
+        except Exception:
+            noise_mult_init, noise_add_init = 0.0, 0.0
+    else:
+        noise = None
+        noise_mult_init, noise_add_init = 0.0, 0.0
+
     p0 = np.array([
         k_init,
         C_init,
@@ -1274,6 +1325,8 @@ def fit_single(ds: DataSet,
         f2_init,
         phi1_init,
         phi2_init,
+        noise_mult_init,
+        noise_add_init,
     ])
 
     if freq_bounds is None:
@@ -1293,6 +1346,8 @@ def fit_single(ds: DataSet,
         f2_lo,
         -PI,
         -PI,
+        -5.0 if noise is not None else 0.0,
+        (np.mean(y) - 5 * np.std(y)) if noise is not None else 0.0,
     ])
     hi = np.array([
         2.0,
@@ -1305,12 +1360,15 @@ def fit_single(ds: DataSet,
         f2_hi,
         PI,
         PI,
+        5.0 if noise is not None else 0.0,
+        (np.mean(y) + 5 * np.std(y)) if noise is not None else 0.0,
     ])
 
     def residuals(p):
-        (k, C, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_) = p
+        (k, C, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_, noise_mult, noise_add) = p
         core = _core_signal(t, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        return w * (k * core + C - y)
+        noise_term = noise_mult * noise + noise_add if noise is not None else 0.0
+        return w * (k * core + C + noise_term - y)
 
     sol = least_squares(
         residuals,
@@ -1341,7 +1399,7 @@ def fit_single(ds: DataSet,
     sigma_f2 = math.sqrt(abs(cov[idx_f2, idx_f2]))
 
     (k_fin, C_fin, A1_fin, A2_fin, tau1_fin, tau2_fin,
-     f1_fin, f2_fin, phi1_fin, phi2_fin) = p
+     f1_fin, f2_fin, phi1_fin, phi2_fin, _, _) = p
     logger.debug(
         "Результат LF-only: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
         f1_fin / GHZ,

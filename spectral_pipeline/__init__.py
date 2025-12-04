@@ -49,6 +49,7 @@ class TimeSeries:
     t: NDArray
     s: NDArray
     meta: RecordMeta
+    noise: NDArray | None = None
 
 @dataclass(slots=True)
 class FittingResult:

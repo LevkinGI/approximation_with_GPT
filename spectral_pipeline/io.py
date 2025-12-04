@@ -29,15 +29,7 @@ def load_records(root: Path) -> List[DataSet]:
         if data.ndim != 2 or data.shape[1] != 3 or data.size < 15:
             logger.warning("Пропуск %s: неверный формат/мало точек", path.name)
             continue
-        x, s_raw, noise = data[:, 0], data[:, 1], data[:, 2]
-        design = np.column_stack((noise, np.ones_like(noise)))
-        try:
-            coef, *_ = np.linalg.lstsq(design, s_raw, rcond=None)
-            mult, add = float(coef[0]), float(coef[1])
-        except Exception as exc:
-            logger.warning("Не удалось оценить шум для %s: %s", path.name, exc)
-            continue
-        s = s_raw - (mult * noise + add)
+        x, s, noise = data[:, 0], data[:, 1], data[:, 2]
         x0 = x[np.argmax(s)]
         t_all = 2.0 * (x - x0) / C_M_S  # секунды
 
@@ -50,12 +42,13 @@ def load_records(root: Path) -> List[DataSet]:
         st = minima[0] + 1 if minima.size else pk + 1
         t = t_all[st:]
         s = s[st:]
+        noise = noise[st:]
 
         # Для LF дополнительно ограничиваем длительность 0.7 нс
         if tag == "LF":
             cutoff = 0.7e-9
             end = np.searchsorted(t, t[0] + cutoff, "right")
-            t, s = t[:end], s[:end]
+            t, s, noise = t[:end], s[:end], noise[:end]
 
         if len(t) < 10:
             logger.warning("Пропуск %s: слишком короткий ряд", path.name)
@@ -65,7 +58,7 @@ def load_records(root: Path) -> List[DataSet]:
             logger.warning("Пропуск %s: некорректный шаг dt", path.name)
             continue
         fs = 1.0 / dt
-        ts = TimeSeries(t=t, s=s, meta=RecordMeta(fs=fs))
+        ts = TimeSeries(t=t, s=s, meta=RecordMeta(fs=fs), noise=noise)
         datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag,
                                ts=ts, root=data_dir))
         logger.info("Загружен %s: %d точек, fs=%.2f ГГц", path.name, len(t), fs / GHZ)
