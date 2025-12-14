@@ -17,6 +17,30 @@ except ImportError:  # pragma: no cover - handled at runtime
 from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
 
 
+def _resolve_tau_bounds(
+    zeta: float | None,
+    tau_init_fallback: float,
+    default_lo: float,
+    default_hi: float,
+) -> tuple[float, float, float]:
+    """Return (tau_init, tau_lo, tau_hi) with positive, sane bounds.
+
+    If ``zeta`` is positive and finite, derive ``tau`` from it and provide a
+    narrow bracket. Otherwise keep ``tau_init_fallback`` (or replace it with the
+    geometric mean of the defaults if it's invalid) and use the default bounds.
+    """
+
+    if zeta is not None and np.isfinite(zeta) and zeta > 0:
+        tau_init = 1.0 / zeta
+        return tau_init, tau_init * 0.8, tau_init * 1.2
+
+    tau_init = tau_init_fallback
+    if not np.isfinite(tau_init) or tau_init <= 0:
+        tau_init = math.sqrt(default_lo * default_hi)
+
+    return tau_init, default_lo, default_hi
+
+
 def _cwt_gaussian_candidates(
     t: NDArray,
     y: NDArray,
@@ -621,11 +645,9 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         "Начальные оценки: f1=%.3f ГГц, f2=%.3f ГГц", f1_init/GHZ, f2_init/GHZ)
 
     _, phi1_init, A1_init, tau1_init = _single_sine_refine(t_lf, y_lf, f1_init)
-    if ds_lf.zeta1 is None:
-        tau1_lo, tau1_hi = 5e-11, 5e-9
-    else:
-        tau1_init = 1.0 / ds_lf.zeta1
-        tau1_lo, tau1_hi = tau1_init * 0.8, tau1_init * 1.2
+    tau1_init, tau1_lo, tau1_hi = _resolve_tau_bounds(
+        ds_lf.zeta1, tau1_init, 5e-11, 5e-9
+    )
 
     proto_lf_hf = A1_init * np.exp(-t_hf / tau1_init) * np.cos(2 * PI * f1_init * t_hf + phi1_init)
 
@@ -647,11 +669,9 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     A1_init *= hf_scale
 
     _, phi2_init, A2_init, tau2_init = _single_sine_refine(t_hf, y_hf - proto_lf_hf, f2_init)
-    if ds_hf.zeta2 is None:
-        tau2_lo, tau2_hi = 5e-12, 5e-10
-    else:
-        tau2_init = 1.0 / ds_hf.zeta2
-        tau2_lo, tau2_hi = tau2_init * 0.8, tau2_init * 1.2
+    tau2_init, tau2_lo, tau2_hi = _resolve_tau_bounds(
+        ds_hf.zeta2, tau2_init, 5e-12, 5e-10
+    )
 
     k_lf_init = 1
     k_hf_init = 1
@@ -1247,19 +1267,15 @@ def fit_single(ds: DataSet,
     )
 
     _, phi1_init, A1_init, tau1_init = _single_sine_refine(t, y, f1_init)
-    if ds.zeta1 is None:
-        tau1_lo, tau1_hi = 5e-11, 5e-9
-    else:
-        tau1_init = 1.0 / ds.zeta1
-        tau1_lo, tau1_hi = tau1_init * 0.8, tau1_init * 1.2
+    tau1_init, tau1_lo, tau1_hi = _resolve_tau_bounds(
+        ds.zeta1, tau1_init, 5e-11, 5e-9
+    )
 
     proto = A1_init * np.exp(-t / tau1_init) * np.cos(2 * PI * f1_init * t + phi1_init)
     _, phi2_init, A2_init, tau2_init = _single_sine_refine(t, y - proto, f2_init)
-    if ds.zeta2 is None:
-        tau2_lo, tau2_hi = 5e-12, 5e-10
-    else:
-        tau2_init = 1.0 / ds.zeta2
-        tau2_lo, tau2_hi = tau2_init * 0.8, tau2_init * 1.2
+    tau2_init, tau2_lo, tau2_hi = _resolve_tau_bounds(
+        ds.zeta2, tau2_init, 5e-12, 5e-10
+    )
 
     k_init = 1.0
     C_init = np.mean(y)
