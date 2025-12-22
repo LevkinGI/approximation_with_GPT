@@ -49,6 +49,12 @@ def load_records(root: Path) -> List[DataSet]:
             end = np.searchsorted(t, cutoff, "right")
             t, s = t[:end], s[:end]
 
+        # Для HF дополнительно ограничиваем длительность 0.15 нс
+        if tag == "HF":
+            cutoff = 0.15e-9
+            end = np.searchsorted(t, cutoff, "right")
+            t, s = t[:end], s[:end]
+
         if len(t) < 10:
             logger.warning("Пропуск %s: слишком короткий ряд", path.name)
             continue
