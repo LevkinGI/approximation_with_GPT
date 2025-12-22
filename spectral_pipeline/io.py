@@ -55,10 +55,16 @@ def load_records(root: Path) -> List[DataSet]:
             end = np.searchsorted(t, cutoff, "right")
             t, s = t[:end], s[:end]
 
+        # Вырезаем выбросы
+        dt = float(np.mean(np.diff(t)))
+        ds = (s[1:] - s[:-1]) / dt
+        ds_std = np.std(ds)
+        tresh_idx = np.where(np.abs(ds) > 3 * ds_std)[0][0]
+        s[tresh_idx + 1] = np.nan
+
         if len(t) < 10:
             logger.warning("Пропуск %s: слишком короткий ряд", path.name)
             continue
-        dt = float(np.mean(np.diff(t)))
         if not np.isfinite(dt) or dt <= 0:
             logger.warning("Пропуск %s: некорректный шаг dt", path.name)
             continue
