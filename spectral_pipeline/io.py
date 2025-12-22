@@ -60,6 +60,7 @@ def load_records(root: Path) -> List[DataSet]:
         ds = (s[1:] - s[:-1]) / dt
         ds_std = np.std(ds)
         tresh_idx = np.where(np.abs(ds) > 3 * ds_std)[0]
+        logg.debug(tresh_idx)
         s[tresh_idx + 1] = np.nan
 
         if len(t) < 10:
