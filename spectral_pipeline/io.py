@@ -56,10 +56,7 @@ def load_records(root: Path) -> List[DataSet]:
             t, s = t[:end], s[:end]
 
         # Вырезаем выбросы
-        ds = np.diff(s) / np.diff(t)
-        tresh_idx = np.where(np.abs(ds) > 3 * np.std(ds))[0]
-        logger.debug(t[tresh_idx + 1]*1e9)
-        s[tresh_idx + 1] = np.nan
+        s = np.where(136.93 < x < 137.04, np.nan, s)
 
         if len(t) < 10:
             logger.warning("Пропуск %s: слишком короткий ряд", path.name)
