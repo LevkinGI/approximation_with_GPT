@@ -48,11 +48,12 @@ def load_records(root: Path) -> List[DataSet]:
         if tag == "LF":
             cutoff = 0.7e-9
             end = np.searchsorted(t, cutoff, "right")
-            x, t, s = x[:end], t[:end], s[:end]
+            st = np.searchsorted(t, 0.1e-9, "right")
+            x, t, s = x[st:end], t[st:end], s[st:end]
 
-        # Для HF дополнительно ограничиваем длительность 0.06 нс
+        # Для HF дополнительно ограничиваем длительность 0.08 нс
         if tag == "HF":
-            cutoff = 0.06e-9
+            cutoff = 0.08e-9
             end = np.searchsorted(t, cutoff, "right")
             x, t, s = x[:end], t[:end], s[:end]
 
