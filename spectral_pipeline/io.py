@@ -44,17 +44,17 @@ def load_records(root: Path) -> List[DataSet]:
         t = t_all[st:]
         s = s[st:]
 
-        # # Для LF дополнительно ограничиваем длительность 0.7 нс
-        # if tag == "LF":
-        #     cutoff = 0.7e-9
-        #     end = np.searchsorted(t, cutoff, "right")
-        #     x, t, s = x[:end], t[:end], s[:end]
+        # Для LF дополнительно ограничиваем длительность 0.7 нс
+        if tag == "LF":
+            cutoff = 0.7e-9
+            end = np.searchsorted(t, cutoff, "right")
+            x, t, s = x[:end], t[:end], s[:end]
 
-        # # Для HF дополнительно ограничиваем длительность 0.08 нс
-        # if tag == "HF":
-        #     cutoff = 0.08e-9
-        #     end = np.searchsorted(t, cutoff, "right")
-        #     x, t, s = x[:end], t[:end], s[:end]
+        # Для HF дополнительно ограничиваем длительность 0.1 нс
+        if tag == "HF":
+            cutoff = 0.1e-9
+            end = np.searchsorted(t, cutoff, "right")
+            x, t, s = x[:end], t[:end], s[:end]
 
         # Вырезаем выбросы
         s = np.where((136.93 < x) & (x < 137.04), s[np.where(x>=137.04)][0], s)
