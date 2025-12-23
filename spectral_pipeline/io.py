@@ -39,22 +39,22 @@ def load_records(root: Path) -> List[DataSet]:
             (np.diff(np.signbit(np.diff(s))) < 0)
             & (np.arange(len(s))[1:-1] > pk)
         )[0]
-        st = np.min([minima[0] + 1 if minima.size else pk + 10, pk + 2 if tag == "LF" else pk + 5, pk + 2])
+        st = np.min([minima[0] + 1 if minima.size else pk + 10, pk + 2 if tag == "LF" else pk + 5])
         x = x[st:]
         t = t_all[st:]
         s = s[st:]
 
-        # Для LF дополнительно ограничиваем длительность 0.7 нс
-        if tag == "LF":
-            cutoff = 0.7e-9
-            end = np.searchsorted(t, cutoff, "right")
-            x, t, s = x[:end], t[:end], s[:end]
+        # # Для LF дополнительно ограничиваем длительность 0.7 нс
+        # if tag == "LF":
+        #     cutoff = 0.7e-9
+        #     end = np.searchsorted(t, cutoff, "right")
+        #     x, t, s = x[:end], t[:end], s[:end]
 
-        # Для HF дополнительно ограничиваем длительность 0.08 нс
-        if tag == "HF":
-            cutoff = 0.08e-9
-            end = np.searchsorted(t, cutoff, "right")
-            x, t, s = x[:end], t[:end], s[:end]
+        # # Для HF дополнительно ограничиваем длительность 0.08 нс
+        # if tag == "HF":
+        #     cutoff = 0.08e-9
+        #     end = np.searchsorted(t, cutoff, "right")
+        #     x, t, s = x[:end], t[:end], s[:end]
 
         # Вырезаем выбросы
         s = np.where((136.93 < x) & (x < 137.04), s[np.where(x>=137.04)][0], s)
