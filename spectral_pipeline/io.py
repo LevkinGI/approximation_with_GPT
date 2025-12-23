@@ -40,7 +40,7 @@ def load_records(root: Path) -> List[DataSet]:
             & (np.arange(len(s))[1:-1] > pk)
         )[0]
         # st = minima[0] + 1 if minima.size else pk + 1
-        st = pk + 1 if tag == "LF" else pk + 3
+        st = pk + 2 if tag == "LF" else pk + 4
         x = x[st:]
         t = t_all[st:]
         s = s[st:]
