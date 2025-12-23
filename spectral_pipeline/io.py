@@ -39,7 +39,8 @@ def load_records(root: Path) -> List[DataSet]:
             (np.diff(np.signbit(np.diff(s))) > 0)
             & (np.arange(len(s))[1:-1] > pk)
         )[0]
-        st = minima[0] + 1 if minima.size else pk + 1
+        # st = minima[0] + 1 if minima.size else pk + 1
+        st = pk + 1 if tag == "LF" else pk + 3
         x = x[st:]
         t = t_all[st:]
         s = s[st:]
