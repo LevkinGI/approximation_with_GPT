@@ -57,6 +57,8 @@ def load_records(root: Path) -> List[DataSet]:
             x, t, s = x[:end], t[:end], s[:end]
 
         # Вырезаем выбросы
+        logger.debug(np.where((136.93 < x) & (x < 137.04)))
+        logger.debug(np.where(136.93 >= x))
         s = np.where((136.93 < x) & (x < 137.04), s[np.where(x<=136.93)][-1], s)
 
         if len(t) < 10:
