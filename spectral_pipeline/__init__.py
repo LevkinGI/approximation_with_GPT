@@ -86,6 +86,7 @@ class DataSet:
     temp_K : температура (К)
     tag    : диапазон сигнала ('LF' или 'HF')
     ts     : временной ряд
+    baseline_const: добавленная константа уровня сигнала
 
     f1_init, f2_init – грубые оценки частот
     zeta1, zeta2     – оценки затухания
@@ -97,6 +98,7 @@ class DataSet:
     tag: FREQ_TAG
     ts: TimeSeries
     root: Path | None = None
+    baseline_const: float = 0.0
 
     # начальные оценки из Coarse + ESPRIT
     f1_init: float = 0.0

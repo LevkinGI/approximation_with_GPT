@@ -41,6 +41,12 @@ def load_records(root: Path) -> List[DataSet]:
 
         # Обрезаем сигнал сразу после первого минимума справа от пика
         pk = int(np.argmax(s))
+        if pk > 0:
+            min_left_idx = int(np.argmin(s[:pk]))
+            baseline_const = float(np.median(s[: min_left_idx + 1]))
+        else:
+            baseline_const = 0.0
+        s = s - baseline_const
         minima = np.where(
             (np.diff(np.signbit(np.diff(s))) < 0)
             & (np.arange(len(s))[1:-1] > pk)
@@ -71,7 +77,7 @@ def load_records(root: Path) -> List[DataSet]:
         fs = 1.0 / dt
         ts = TimeSeries(t=t, s=s, meta=RecordMeta(fs=fs))
         datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag,
-                               ts=ts, root=data_dir))
+                               ts=ts, root=data_dir, baseline_const=baseline_const))
         logger.info("Загружен %s: %d точек, fs=%.2f ГГц", path.name, len(t), fs / GHZ)
     logger.info("Загружено %d наборов", len(datasets))
     return datasets
