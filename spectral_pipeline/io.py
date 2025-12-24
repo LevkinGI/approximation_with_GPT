@@ -8,30 +8,6 @@ import numpy as np
 from . import DataSet, TimeSeries, RecordMeta, logger, GHZ, C_M_S
 
 
-def _local_minima_indices(signal: np.ndarray) -> np.ndarray:
-    """Return indices of local minima in *signal* using sign changes of the derivative.
-
-    Plateaus are handled by propagating the nearest non-zero derivative sign so that
-    transitions from decreasing to increasing segments are still detected.
-    """
-    if signal.size < 3:
-        return np.array([], dtype=int)
-    diff = np.diff(signal)
-    if diff.size == 0:
-        return np.array([], dtype=int)
-    signs = np.sign(diff)
-    # propagate zeros forward then backward
-    for i in range(1, signs.size):
-        if signs[i] == 0:
-            signs[i] = signs[i - 1]
-    for i in range(signs.size - 2, -1, -1):
-        if signs[i] == 0:
-            signs[i] = signs[i + 1]
-    sign_changes = np.diff(signs)
-    minima = np.where(sign_changes < 0)[0] + 1
-    return minima.astype(int)
-
-
 def _replace_spike_segment(x: np.ndarray, s: np.ndarray, lower: float, upper: float) -> np.ndarray:
     """Replace values in ``s`` where ``x`` is between ``lower`` and ``upper``.
 
@@ -87,9 +63,9 @@ def load_records(root: Path) -> List[DataSet]:
         s = _replace_spike_segment(x, s, 133.15, 133.25)
 
         pk = int(np.argmax(s))
-        minima = _local_minima_indices(s)
-        left_minima = minima[minima < pk]
-        right_minima = minima[minima > pk]
+        minima_all = np.where(np.diff(np.signbit(np.diff(s))) < 0)[0] + 1
+        left_minima = minima_all[minima_all < pk]
+        right_minima = minima_all[minima_all > pk]
         left_min_idx = int(left_minima[-1]) if left_minima.size else None
         right_min_idx = int(right_minima[0]) if right_minima.size else None
 
@@ -103,7 +79,7 @@ def load_records(root: Path) -> List[DataSet]:
         # Обрезаем сигнал сразу после первого минимума справа от пика
         st_candidates = []
         if right_min_idx is not None:
-            st_candidates.append(right_min_idx)
+            st_candidates.append(right_min_idx + 1)
         else:
             st_candidates.append(pk + 10)
         st_candidates.append(pk + 2 if tag == "LF" else pk + 5)
