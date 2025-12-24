@@ -808,10 +808,27 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     except np.linalg.LinAlgError:
         cov = np.full((n, n), np.nan)
 
-    idx_f1 = 8
-    idx_f2 = 9
-    sigma_f1 = math.sqrt(abs(cov[idx_f1, idx_f1]))
-    sigma_f2 = math.sqrt(abs(cov[idx_f2, idx_f2]))
+    def _sigma(idx: int) -> float:
+        try:
+            val = float(cov[idx, idx])
+        except Exception:
+            return float("nan")
+        if not np.isfinite(val) or val < 0:
+            return float("nan")
+        return math.sqrt(val)
+
+    sigma_k_lf = _sigma(0)
+    sigma_k_hf = _sigma(1)
+    sigma_C_lf = _sigma(2)
+    sigma_C_hf = _sigma(3)
+    sigma_A1 = _sigma(4)
+    sigma_A2 = _sigma(5)
+    sigma_tau1 = _sigma(6)
+    sigma_tau2 = _sigma(7)
+    sigma_f1 = _sigma(8)
+    sigma_f2 = _sigma(9)
+    sigma_phi1 = _sigma(10)
+    sigma_phi2 = _sigma(11)
 
     (k_lf, k_hf, C_lf, C_hf,
       A1, A2, tau1, tau2,
@@ -835,6 +852,16 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         C_hf=C_hf,
         f1_err=sigma_f1,
         f2_err=sigma_f2,
+        k_lf_err=sigma_k_lf,
+        k_hf_err=sigma_k_hf,
+        C_lf_err=sigma_C_lf,
+        C_hf_err=sigma_C_hf,
+        A1_err=sigma_A1,
+        A2_err=sigma_A2,
+        tau1_err=sigma_tau1,
+        tau2_err=sigma_tau2,
+        phi1_err=sigma_phi1,
+        phi2_err=sigma_phi2,
         cost=cost,
     ), cost
 
@@ -1270,6 +1297,16 @@ def process_pair(
             C_hf=best_fit.C_hf,
             f1_err=best_fit.f2_err,
             f2_err=best_fit.f1_err,
+            k_lf_err=best_fit.k_lf_err,
+            k_hf_err=best_fit.k_hf_err,
+            C_lf_err=best_fit.C_lf_err,
+            C_hf_err=best_fit.C_hf_err,
+            A1_err=best_fit.A2_err,
+            A2_err=best_fit.A1_err,
+            tau1_err=best_fit.tau2_err,
+            tau2_err=best_fit.tau1_err,
+            phi1_err=best_fit.phi2_err,
+            phi2_err=best_fit.phi1_err,
             cost=best_fit.cost,
         )
     if best_fit.cost is not None and best_fit.cost > MAX_COST:
@@ -1441,10 +1478,25 @@ def fit_single(ds: DataSet,
     except np.linalg.LinAlgError:
         cov = np.full((n, n), np.nan)
 
-    idx_f1 = 6
-    idx_f2 = 7
-    sigma_f1 = math.sqrt(abs(cov[idx_f1, idx_f1]))
-    sigma_f2 = math.sqrt(abs(cov[idx_f2, idx_f2]))
+    def _sigma(idx: int) -> float:
+        try:
+            val = float(cov[idx, idx])
+        except Exception:
+            return float("nan")
+        if not np.isfinite(val) or val < 0:
+            return float("nan")
+        return math.sqrt(val)
+
+    sigma_k = _sigma(0)
+    sigma_C = _sigma(1)
+    sigma_A1 = _sigma(2)
+    sigma_A2 = _sigma(3)
+    sigma_tau1 = _sigma(4)
+    sigma_tau2 = _sigma(5)
+    sigma_f1 = _sigma(6)
+    sigma_f2 = _sigma(7)
+    sigma_phi1 = _sigma(8)
+    sigma_phi2 = _sigma(9)
 
     (k_fin, C_fin, A1_fin, A2_fin, tau1_fin, tau2_fin,
      f1_fin, f2_fin, phi1_fin, phi2_fin) = p
@@ -1473,6 +1525,16 @@ def fit_single(ds: DataSet,
             C_hf=float("nan"),
             f1_err=sigma_f1,
             f2_err=sigma_f2,
+            k_lf_err=sigma_k,
+            k_hf_err=float("nan"),
+            C_lf_err=sigma_C,
+            C_hf_err=float("nan"),
+            A1_err=sigma_A1,
+            A2_err=sigma_A2,
+            tau1_err=sigma_tau1,
+            tau2_err=sigma_tau2,
+            phi1_err=sigma_phi1,
+            phi2_err=sigma_phi2,
             cost=cost,
         ),
         cost,
@@ -1782,6 +1844,16 @@ def process_lf_only(
             C_hf=best_fit.C_hf,
             f1_err=best_fit.f2_err,
             f2_err=best_fit.f1_err,
+            k_lf_err=best_fit.k_lf_err,
+            k_hf_err=best_fit.k_hf_err,
+            C_lf_err=best_fit.C_lf_err,
+            C_hf_err=best_fit.C_hf_err,
+            A1_err=best_fit.A2_err,
+            A2_err=best_fit.A1_err,
+            tau1_err=best_fit.tau2_err,
+            tau2_err=best_fit.tau1_err,
+            phi1_err=best_fit.phi2_err,
+            phi2_err=best_fit.phi1_err,
             cost=best_fit.cost,
         )
 

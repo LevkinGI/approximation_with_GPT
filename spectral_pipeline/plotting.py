@@ -104,12 +104,12 @@ def visualize_stacked(
 
     y_step = 0.8 * max(ranges + [1e-3])
 
-    freq_vs_H: dict[int, list[tuple[int, float, float]]] = {}
-    freq_vs_T: dict[int, list[tuple[int, float, float]]] = {}
-    tau_vs_H: dict[int, list[tuple[int, float, float]]] = {}
-    tau_vs_T: dict[int, list[tuple[int, float, float]]] = {}
-    amp_vs_H: dict[int, list[tuple[int, float, float]]] = {}
-    amp_vs_T: dict[int, list[tuple[int, float, float]]] = {}
+    freq_vs_H: dict[int, list[tuple[int, float, float, float, float]]] = {}
+    freq_vs_T: dict[int, list[tuple[int, float, float, float, float]]] = {}
+    tau_vs_H: dict[int, list[tuple[int, float, float, float, float]]] = {}
+    tau_vs_T: dict[int, list[tuple[int, float, float, float, float]]] = {}
+    amp_vs_H: dict[int, list[tuple[int, float, float, float, float]]] = {}
+    amp_vs_T: dict[int, list[tuple[int, float, float, float, float]]] = {}
     k_vs_H: dict[int, list[tuple[int, float, float]]] = {}
     k_vs_T: dict[int, list[tuple[int, float, float]]] = {}
     phi_vs_H: dict[int, list[tuple[int, float, float]]] = {}
@@ -120,21 +120,32 @@ def visualize_stacked(
         if ds_lf.fit is None:
             continue
         H, T = ds_lf.field_mT, ds_lf.temp_K
-        f1, f2 = sorted((ds_lf.fit.f1 / GHZ, ds_lf.fit.f2 / GHZ))
-        tau1 = (1.0 / ds_lf.fit.zeta1) / NS
-        tau2 = (1.0 / ds_lf.fit.zeta2) / NS
-        freq_vs_H.setdefault(T, []).append((H, f1, f2))
-        freq_vs_T.setdefault(H, []).append((T, f1, f2))
-        tau_vs_H.setdefault(T, []).append((H, tau1, tau2))
-        tau_vs_T.setdefault(H, []).append((T, tau1, tau2))
-        amp_vs_H.setdefault(T, []).append((H, ds_lf.fit.A1, ds_lf.fit.A2))
-        amp_vs_T.setdefault(H, []).append((T, ds_lf.fit.A1, ds_lf.fit.A2))
-        k_vs_H.setdefault(T, []).append((H, ds_lf.fit.k_lf, ds_lf.fit.k_hf))
-        k_vs_T.setdefault(H, []).append((T, ds_lf.fit.k_lf, ds_lf.fit.k_hf))
-        phi_vs_H.setdefault(T, []).append((H, ds_lf.fit.phi1, ds_lf.fit.phi2))
-        phi_vs_T.setdefault(H, []).append((T, ds_lf.fit.phi1, ds_lf.fit.phi2))
-        C_vs_H.setdefault(T, []).append((H, ds_lf.fit.C_lf, ds_lf.fit.C_hf))
-        C_vs_T.setdefault(H, []).append((T, ds_lf.fit.C_lf, ds_lf.fit.C_hf))
+        fit = ds_lf.fit
+        f_pairs = [
+            (fit.f1 / GHZ, fit.f1_err / GHZ if fit.f1_err is not None else np.nan),
+            (fit.f2 / GHZ, fit.f2_err / GHZ if fit.f2_err is not None else np.nan),
+        ]
+        f_pairs.sort(key=lambda item: item[0])
+        f_vals = [val for val, _ in f_pairs]
+        f_errs = [err for _, err in f_pairs]
+        tau1 = (1.0 / fit.zeta1) / NS
+        tau2 = (1.0 / fit.zeta2) / NS
+        tau1_err = fit.tau1_err / NS if fit.tau1_err is not None else np.nan
+        tau2_err = fit.tau2_err / NS if fit.tau2_err is not None else np.nan
+        amp1_err = fit.A1_err if fit.A1_err is not None else np.nan
+        amp2_err = fit.A2_err if fit.A2_err is not None else np.nan
+        freq_vs_H.setdefault(T, []).append((H, f_vals[0], f_vals[1], f_errs[0], f_errs[1]))
+        freq_vs_T.setdefault(H, []).append((T, f_vals[0], f_vals[1], f_errs[0], f_errs[1]))
+        tau_vs_H.setdefault(T, []).append((H, tau1, tau2, tau1_err, tau2_err))
+        tau_vs_T.setdefault(H, []).append((T, tau1, tau2, tau1_err, tau2_err))
+        amp_vs_H.setdefault(T, []).append((H, fit.A1, fit.A2, amp1_err, amp2_err))
+        amp_vs_T.setdefault(H, []).append((T, fit.A1, fit.A2, amp1_err, amp2_err))
+        k_vs_H.setdefault(T, []).append((H, fit.k_lf, fit.k_hf))
+        k_vs_T.setdefault(H, []).append((T, fit.k_lf, fit.k_hf))
+        phi_vs_H.setdefault(T, []).append((H, fit.phi1, fit.phi2))
+        phi_vs_T.setdefault(H, []).append((T, fit.phi1, fit.phi2))
+        C_vs_H.setdefault(T, []).append((H, fit.C_lf, fit.C_hf))
+        C_vs_T.setdefault(H, []).append((T, fit.C_lf, fit.C_hf))
 
     freq_vs_H = {T: sorted(v) for T, v in freq_vs_H.items() if len(v) >= 2}
     freq_vs_T = {H: sorted(v) for H, v in freq_vs_T.items() if len(v) >= 2}
@@ -370,7 +381,7 @@ def visualize_stacked(
 
     if varying == "T":
         for H_fix, pts in freq_vs_T.items():
-            T_vals, fLF, fHF = zip(*pts)
+            T_vals, fLF, fHF, fLF_err, fHF_err = zip(*pts)
             fig.add_trace(
                 go.Scatter(
                     x=T_vals,
@@ -379,6 +390,7 @@ def visualize_stacked(
                     line=dict(width=2, color="red"),
                     marker=dict(size=9, color="red"),
                     name=f"f_LF, H = {H_fix} mT",
+                    error_y=dict(type="data", array=fLF_err, visible=True),
                 ),
                 row=1,
                 col=4,
@@ -391,12 +403,13 @@ def visualize_stacked(
                     line=dict(width=2, color="blue"),
                     marker=dict(size=9, color="blue"),
                     name=f"f_HF, H = {H_fix} mT",
+                    error_y=dict(type="data", array=fHF_err, visible=True),
                 ),
                 row=1,
                 col=4,
             )
         for H_fix, pts in tau_vs_T.items():
-            T_vals, tau_LF, tau_HF = zip(*pts)
+            T_vals, tau_LF, tau_HF, tau_LF_err, tau_HF_err = zip(*pts)
             fig.add_trace(
                 go.Scatter(
                     x=T_vals,
@@ -405,6 +418,7 @@ def visualize_stacked(
                     line=dict(width=2, color="red"),
                     marker=dict(size=9, color="red"),
                     name=f"tau_LF, H = {H_fix} mT",
+                    error_y=dict(type="data", array=tau_LF_err, visible=True),
                 ),
                 row=2,
                 col=4,
@@ -417,12 +431,13 @@ def visualize_stacked(
                     line=dict(width=2, color="blue"),
                     marker=dict(size=9, color="blue"),
                     name=f"tau_HF, H = {H_fix} mT",
+                    error_y=dict(type="data", array=tau_HF_err, visible=True),
                 ),
                 row=2,
                 col=4,
             )
         for H_fix, pts in amp_vs_T.items():
-            T_vals, amp_LF, amp_HF = zip(*pts)
+            T_vals, amp_LF, amp_HF, amp_LF_err, amp_HF_err = zip(*pts)
             fig.add_trace(
                 go.Scatter(
                     x=T_vals,
@@ -431,6 +446,7 @@ def visualize_stacked(
                     line=dict(width=2, color="red"),
                     marker=dict(size=9, color="red"),
                     name=f"A_LF, H = {H_fix} mT",
+                    error_y=dict(type="data", array=amp_LF_err, visible=True),
                 ),
                 row=3,
                 col=4,
@@ -443,6 +459,7 @@ def visualize_stacked(
                     line=dict(width=2, color="blue"),
                     marker=dict(size=9, color="blue"),
                     name=f"A_HF, H = {H_fix} mT",
+                    error_y=dict(type="data", array=amp_HF_err, visible=True),
                 ),
                 row=3,
                 col=4,
@@ -450,7 +467,7 @@ def visualize_stacked(
         fig.update_xaxes(title_text="Temperature (K)", row=3, col=4)
     else:
         for T_fix, pts in freq_vs_H.items():
-            H_vals, fLF, fHF = zip(*pts)
+            H_vals, fLF, fHF, fLF_err, fHF_err = zip(*pts)
             fig.add_trace(
                 go.Scatter(
                     x=H_vals,
@@ -459,6 +476,7 @@ def visualize_stacked(
                     line=dict(width=2, color="red"),
                     marker=dict(size=9, color="red"),
                     name=f"f_LF, T = {T_fix} K",
+                    error_y=dict(type="data", array=fLF_err, visible=True),
                 ),
                 row=1,
                 col=4,
@@ -471,12 +489,13 @@ def visualize_stacked(
                     line=dict(width=2, color="blue"),
                     marker=dict(size=9, color="blue"),
                     name=f"f_HF, T = {T_fix} K",
+                    error_y=dict(type="data", array=fHF_err, visible=True),
                 ),
                 row=1,
                 col=4,
             )
         for T_fix, pts in tau_vs_H.items():
-            H_vals, tau_LF, tau_HF = zip(*pts)
+            H_vals, tau_LF, tau_HF, tau_LF_err, tau_HF_err = zip(*pts)
             fig.add_trace(
                 go.Scatter(
                     x=H_vals,
@@ -485,6 +504,7 @@ def visualize_stacked(
                     line=dict(width=2, color="red"),
                     marker=dict(size=9, color="red"),
                     name=f"tau_LF, T = {T_fix} K",
+                    error_y=dict(type="data", array=tau_LF_err, visible=True),
                 ),
                 row=2,
                 col=4,
@@ -497,12 +517,13 @@ def visualize_stacked(
                     line=dict(width=2, color="blue"),
                     marker=dict(size=9, color="blue"),
                     name=f"tau_HF, T = {T_fix} K",
+                    error_y=dict(type="data", array=tau_HF_err, visible=True),
                 ),
                 row=2,
                 col=4,
             )
         for T_fix, pts in amp_vs_H.items():
-            H_vals, amp_LF, amp_HF = zip(*pts)
+            H_vals, amp_LF, amp_HF, amp_LF_err, amp_HF_err = zip(*pts)
             fig.add_trace(
                 go.Scatter(
                     x=H_vals,
@@ -511,6 +532,7 @@ def visualize_stacked(
                     line=dict(width=2, color="red"),
                     marker=dict(size=9, color="red"),
                     name=f"A_LF, T = {T_fix} K",
+                    error_y=dict(type="data", array=amp_LF_err, visible=True),
                 ),
                 row=3,
                 col=4,
@@ -523,6 +545,7 @@ def visualize_stacked(
                     line=dict(width=2, color="blue"),
                     marker=dict(size=9, color="blue"),
                     name=f"A_HF, T = {T_fix} K",
+                    error_y=dict(type="data", array=amp_HF_err, visible=True),
                 ),
                 row=3,
                 col=4,
@@ -531,6 +554,48 @@ def visualize_stacked(
     fig.update_yaxes(title_text="Frequency (GHz)", row=1, col=4)
     fig.update_yaxes(title_text="Decay time (ns)", row=2, col=4)
     fig.update_yaxes(title_text="Amplitude", row=3, col=4)
+
+    def _calc_range(values: list[float], errors: list[float], *, enforce_zero: bool = False, clamp_zero_if_needed: bool = False):
+        if not values:
+            return None
+        vals = np.array(values, dtype=float)
+        errs = np.nan_to_num(np.array(errors, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+        v_min = float(np.min(vals))
+        v_max = float(np.max(vals))
+        span = v_max - v_min
+        low_candidate = v_min - 0.2 * span
+        high_candidate = v_max + 0.2 * span
+        below = np.any(vals - errs < low_candidate)
+        above = np.any(vals + errs > high_candidate)
+        if not (below or above):
+            return None
+        if enforce_zero:
+            low = 0.0
+        elif clamp_zero_if_needed and np.any(vals - errs < 0):
+            low = max(0.0, low_candidate)
+        else:
+            low = low_candidate
+        return [low, high_candidate]
+
+    def _update_axis_range(data_dict, *, row: int, enforce_zero: bool = False, clamp_zero_if_needed: bool = False):
+        vals: list[float] = []
+        errs: list[float] = []
+        for entries in data_dict.values():
+            for _, v1, v2, e1, e2 in entries:
+                vals.extend([v1, v2])
+                errs.extend([e1, e2])
+        rng = _calc_range(vals, errs, enforce_zero=enforce_zero, clamp_zero_if_needed=clamp_zero_if_needed)
+        if rng is not None:
+            fig.update_yaxes(range=rng, row=row, col=4)
+
+    target_freq = freq_vs_T if varying == "T" else freq_vs_H
+    target_tau = tau_vs_T if varying == "T" else tau_vs_H
+    target_amp = amp_vs_T if varying == "T" else amp_vs_H
+
+    _update_axis_range(target_freq, row=1, clamp_zero_if_needed=True)
+    _update_axis_range(target_tau, row=2, enforce_zero=True, clamp_zero_if_needed=True)
+    _update_axis_range(target_amp, row=3, clamp_zero_if_needed=True)
+    fig.update_yaxes(rangemode="tozero", row=2, col=4)
 
     if theory_curves is not None:
         pass

@@ -66,6 +66,16 @@ class FittingResult:
     C_hf: float
     f1_err: float | None = None
     f2_err: float | None = None
+    k_lf_err: float | None = None
+    k_hf_err: float | None = None
+    C_lf_err: float | None = None
+    C_hf_err: float | None = None
+    A1_err: float | None = None
+    A2_err: float | None = None
+    tau1_err: float | None = None
+    tau2_err: float | None = None
+    phi1_err: float | None = None
+    phi2_err: float | None = None
     cost: float | None = None
 
 @dataclass(slots=True)
