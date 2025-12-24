@@ -762,7 +762,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         0.0, 0.0,
         tau1_lo, tau2_lo,
         f1_lo, f2_lo,
-        -PI, -PI
+        -PI-1e-5, -PI-1e-5
     ])
     hi = np.array([
         2, 2,
@@ -770,7 +770,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         A1_init * 2, A2_init * 2,
         tau1_hi, tau2_hi,
         f1_hi, f2_hi,
-        PI, PI
+        PI+1e-5, PI+1e-5
     ])
 
     t_all = np.concatenate((t_lf, t_hf))
@@ -1399,8 +1399,8 @@ def fit_single(ds: DataSet,
         tau2_lo,
         f1_lo,
         f2_lo,
-        -PI,
-        -PI,
+        -PI-1e-5,
+        -PI-1e-5,
     ])
     hi = np.array([
         2.0,
@@ -1411,8 +1411,8 @@ def fit_single(ds: DataSet,
         tau2_hi,
         f1_hi,
         f2_hi,
-        PI,
-        PI,
+        PI+1e-5,
+        PI+1e-5,
     ])
 
     def residuals(p):
