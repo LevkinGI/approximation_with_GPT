@@ -902,9 +902,9 @@ def process_pair(
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
     def _prepare_signals() -> tuple[NDArray, NDArray, float]:
-        """Return LF/HF signals aligned to a common sampling rate."""
-        spec_lf = y_lf - np.mean(y_lf)
-        spec_hf = y_hf - np.mean(y_hf)
+        """Return LF/HF signals aligned to a common sampling rate (baseline already removed)."""
+        spec_lf = y_lf
+        spec_hf = y_hf
         fs_lf = ds_lf.ts.meta.fs
         fs_hf = ds_hf.ts.meta.fs
         if abs(fs_lf - fs_hf) > 1e-9:
@@ -920,12 +920,19 @@ def process_pair(
             spec_hf_c = spec_hf[:n]
         return spec_lf_c, spec_hf_c, fs_common
 
+    def _initial_background(t: NDArray, y: NDArray) -> tuple[float, float]:
+        amp_span = max(np.ptp(y), 1e-3)
+        duration = t[-1] - t[0] if t.size else 0.0
+        tau0_guess = max(duration / 3 if duration > 0 else 1e-11, 1e-11)
+        return 0.1 * amp_span, tau0_guess
+
     def _search_candidates() -> tuple[list[tuple[float, Optional[float]]],
                                       list[tuple[float, Optional[float]]],
                                       tuple[tuple[float, float], tuple[float, float]] | None]:
         f1_rough, phi1, A1, tau1 = _single_sine_refine(t_lf, y_lf, f0=10 * GHZ)
         proto_lf = A1 * np.exp(-t_hf / tau1) * np.cos(2 * np.pi * f1_rough * t_hf + phi1)
-        residual = y_hf - proto_lf
+        C0_guess, tau0_guess = _initial_background(t_hf, y_hf)
+        residual = y_hf - proto_lf - C0_guess * np.exp(-t_hf / tau0_guess)
         f2_rough, _, _, _ = _single_sine_refine(t_hf, residual, f0=40 * GHZ)
         logger.debug("Rough estimates: f1=%.3f ГГц, f2=%.3f ГГц",
                      f1_rough/GHZ, f2_rough/GHZ)
@@ -1591,6 +1598,12 @@ def process_lf_only(
     )
     t, y = ds_lf.ts.t, ds_lf.ts.s
 
+    def _initial_background(t_arr: NDArray, y_arr: NDArray) -> tuple[float, float]:
+        amp_span = max(np.ptp(y_arr), 1e-3)
+        duration = t_arr[-1] - t_arr[0] if t_arr.size else 0.0
+        tau0_guess = max(duration / 3 if duration > 0 else 1e-11, 1e-11)
+        return 0.1 * amp_span, tau0_guess
+
     def _search_candidates_single() -> tuple[
         list[tuple[float, Optional[float]]],
         list[tuple[float, Optional[float]]],
@@ -1598,7 +1611,8 @@ def process_lf_only(
     ]:
         f1_rough, phi1, A1, tau1 = _single_sine_refine(t, y, f0=10 * GHZ)
         proto = A1 * np.exp(-t / tau1) * np.cos(2 * np.pi * f1_rough * t + phi1)
-        residual = y - proto
+        C0_guess, tau0_guess = _initial_background(t, y)
+        residual = y - proto - C0_guess * np.exp(-t / tau0_guess)
         f2_rough, _, _, _ = _single_sine_refine(t, residual, f0=40 * GHZ)
         logger.debug(
             "Rough estimates (LF only): f1=%.3f ГГц, f2=%.3f ГГц",
@@ -1659,7 +1673,7 @@ def process_lf_only(
         elif not hf_c:
             raise RuntimeError("HF-тон не найден")
 
-        spec_lf = y - np.mean(y)
+        spec_lf = y
         f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
         mask_lf = (
             (zeta_all_lf > 0)
@@ -1767,7 +1781,7 @@ def process_lf_only(
             )
         elif not hf_cand:
             raise RuntimeError("HF-тон не найден")
-        spec_lf = y - np.mean(y)
+        spec_lf = y
         f_all_lf, zeta_all_lf = _esprit_freqs_and_decay(spec_lf, ds_lf.ts.meta.fs)
         mask_lf = (
             (zeta_all_lf > 0)
