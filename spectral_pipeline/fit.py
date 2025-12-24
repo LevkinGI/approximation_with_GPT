@@ -5,6 +5,7 @@ from collections.abc import Iterable as IterableABC
 from pathlib import Path
 import math
 import numpy as np
+from numba import njit
 from numpy.typing import NDArray
 from scipy.optimize import least_squares
 from scipy.signal import welch, find_peaks, get_window
@@ -596,12 +597,16 @@ def _esprit_freqs_and_decay(r: NDArray, fs: float, p: int = 6
     logger.debug("ESPRIT raw zeta: %s", np.round(zeta, 3))
     return f, zeta
 
-
+@njit(fastmath=True, cache=True)
 def _core_signal(t: NDArray, A1, A2, tau1, tau2, f1, f2, phi1, phi2) -> NDArray:
-    return (
-        A1 * np.exp(-t / tau1) * np.cos(2 * np.pi * f1 * t + phi1) +
-        A2 * np.exp(-t / tau2) * np.cos(2 * np.pi * f2 * t + phi2)
-    )
+    inv_tau1 = -1.0 / tau1
+    inv_tau2 = -1.0 / tau2
+    omega1 = 2 * np.pi * f1
+    omega2 = 2 * np.pi * f2
+    
+    term1 = A1 * np.exp(t * inv_tau1) * np.cos(omega1 * t + phi1)
+    term2 = A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2)
+    return term1 + term2
 
 
 def _single_sine_refine(t: NDArray, y: NDArray, f0: float
@@ -619,6 +624,62 @@ def _single_sine_refine(t: NDArray, y: NDArray, f0: float
     sol = least_squares(lambda p: model(p) - y, p0, bounds=(lo, hi), method="trf")
     A_est, f_est, phi_est, tau_est, _ = sol.x
     return f_est, phi_est, A_est, tau_est
+
+
+@njit(fastmath=True, cache=True)
+def _numba_residuals(p, t_all, y_all, weights_all, split_idx):
+    # Распаковка параметров
+    # Порядок: k_lf, k_hf, C_lf, C_hf, A1, A2, tau1, tau2, f1, f2, phi1, phi2
+    k_lf = p[0]
+    k_hf = p[1]
+    C_lf = p[2]
+    C_hf = p[3]
+    A1   = p[4]
+    A2   = p[5]
+    tau1 = p[6]
+    tau2 = p[7]
+    f1   = p[8]
+    f2   = p[9]
+    phi1 = p[10]
+    phi2 = p[11]
+
+    # Предварительные вычисления для скорости
+    inv_tau1 = -1.0 / tau1
+    inv_tau2 = -1.0 / tau2
+    omega1 = 2.0 * np.pi * f1
+    omega2 = 2.0 * np.pi * f2
+
+    # Создаем массив для результата
+    # Numba умеет эффективно работать с np.empty_like
+    residuals = np.empty_like(y_all)
+    
+    # Основной цикл. Numba векторизует это автоматически.
+    # Мы вычисляем сигнал сразу для всего массива t_all
+    # signal = A1 * exp(...) * cos(...) + ...
+    
+    # Примечание: Мы можем сделать один цикл по всему массиву t_all,
+    # но так как k и C меняются в точке split_idx, разобьем на два блока.
+    
+    # --- БЛОК LF (от 0 до split_idx) ---
+    for i in range(split_idx):
+        t = t_all[i]
+        signal = (A1 * np.exp(t * inv_tau1) * np.cos(omega1 * t + phi1) +
+                  A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2))
+        
+        # Применяем модель: (k * signal + C - y) * weight
+        # weight уже содержит в себе w_lf и нормализацию 1/sqrt(n)
+        residuals[i] = (k_lf * signal + C_lf - y_all[i]) * weights_all[i]
+
+    # --- БЛОК HF (от split_idx до конца) ---
+    for i in range(split_idx, len(t_all)):
+        t = t_all[i]
+        signal = (A1 * np.exp(t * inv_tau1) * np.cos(omega1 * t + phi1) +
+                  A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2))
+        
+        # Для HF у нас нет временных весов w_lf (они равны 1), только нормализация
+        residuals[i] = (k_hf * signal + C_hf - y_all[i]) * weights_all[i]
+
+    return residuals
 
 
 def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
@@ -712,26 +773,20 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         PI, PI
     ])
 
+    t_all = np.concatenate((t_lf, t_hf))
+    y_all = np.concatenate((y_lf, y_hf))
+    split_idx = len(t_lf)
+
+    n_lf = y_lf.size
+    n_hf = y_hf.size
+    norm_lf = 1.0 / math.sqrt(n_lf) if n_lf > 0 else 0.0
+    norm_hf = 1.0 / math.sqrt(n_hf) if n_hf > 0 else 0.0
+    weights_lf = w_lf_raw * norm_lf
+    weights_hf = np.full(n_hf, norm_hf, dtype=y_hf.dtype)
+    weights_all = np.concatenate((weights_lf, weights_hf))
+
     def residuals(p):
-        (k_lf, k_hf, C_lf, C_hf,
-         A1, A2, tau1, tau2,
-         f1_, f2_, phi1_, phi2_) = p
-
-        core_lf = _core_signal(t_lf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        core_hf = _core_signal(t_hf, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        res_lf = w_lf * (k_lf * core_lf + C_lf - y_lf)
-        res_hf = k_hf * core_hf + C_hf - y_hf
-
-        # Normalize channel residuals so that the sum of squares corresponds to
-        # the mean squared error for each channel individually.
-        n_lf = y_lf.size
-        n_hf = y_hf.size
-        if n_lf:
-            res_lf = res_lf / math.sqrt(n_lf)
-        if n_hf:
-            res_hf = res_hf / math.sqrt(n_hf)
-
-        return np.concatenate([res_lf, res_hf])
+        return _numba_residuals(p, t_all, y_all, weights_all, split_idx)
 
     sol = least_squares(
         residuals,
@@ -739,7 +794,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         bounds=(lo, hi),
         method='trf',
         ftol=1e-15, xtol=1e-15, gtol=1e-15,
-        max_nfev=1000,
+        max_nfev=5000,
         loss='soft_l1',
         f_scale=0.1,
         x_scale='jac',
@@ -1240,6 +1295,41 @@ def process_pair(
         )
         return best_fit
 
+@njit(fastmath=True, cache=True)
+def _numba_residuals_single(p, t, y, w):
+    # Распаковка параметров (порядок должен совпадать с p0)
+    k    = p[0]
+    C    = p[1]
+    A1   = p[2]
+    A2   = p[3]
+    tau1 = p[4]
+    tau2 = p[5]
+    f1   = p[6]
+    f2   = p[7]
+    phi1 = p[8]
+    phi2 = p[9]
+
+    # Предварительные расчеты констант
+    inv_tau1 = -1.0 / tau1
+    inv_tau2 = -1.0 / tau2
+    omega1 = 2.0 * np.pi * f1
+    omega2 = 2.0 * np.pi * f2
+
+    # Аллокация массива результата
+    res = np.empty_like(y)
+
+    # Единый цикл (Loop Fusion)
+    for i in range(len(t)):
+        ti = t[i]
+        # Вычисляем сигнал
+        core = (A1 * np.exp(ti * inv_tau1) * np.cos(omega1 * ti + phi1) +
+                A2 * np.exp(ti * inv_tau2) * np.cos(omega2 * ti + phi2))
+        
+        # Вычисляем остаток с учетом весов
+        res[i] = w[i] * (k * core + C - y[i])
+
+    return res
+
 
 def fit_single(ds: DataSet,
                freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
@@ -1326,9 +1416,7 @@ def fit_single(ds: DataSet,
     ])
 
     def residuals(p):
-        (k, C, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_) = p
-        core = _core_signal(t, A1, A2, tau1, tau2, f1_, f2_, phi1_, phi2_)
-        return w * (k * core + C - y)
+        return _numba_residuals_single(p, t, y, w)
 
     sol = least_squares(
         residuals,
@@ -1338,7 +1426,7 @@ def fit_single(ds: DataSet,
         ftol=1e-15,
         xtol=1e-15,
         gtol=1e-15,
-        max_nfev=1000,
+        max_nfev=5000,
         loss="soft_l1",
         f_scale=0.1,
         x_scale="jac",
