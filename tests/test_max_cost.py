@@ -31,10 +31,19 @@ def test_export_skips_unsuccessful_pairs(tmp_path):
         k_hf=1.0,
         C_lf=0.0,
         C_hf=0.0,
+        C0=0.0,
+        tau0=1e-10,
+        C0_err=0.1,
+        tau0_err=1e-11,
         cost=MAX_COST,
     )
     lf.fit = hf.fit = fit
 
     export_freq_tables([(lf, hf)], tmp_path, outfile=out)
     assert out.exists() and out.stat().st_size > 0
+    import pandas as pd
 
+    df = pd.read_excel(out, sheet_name="parameters", index_col=0)
+    assert "C_0" in df.index
+    assert "Погр. C_0" in df.index
+    assert "tau_0, нс" in df.index
