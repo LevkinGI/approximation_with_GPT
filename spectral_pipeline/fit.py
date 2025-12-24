@@ -33,11 +33,13 @@ def _resolve_tau_bounds(
     if zeta is not None and np.isfinite(zeta) and zeta > 0:
         tau_init = 1.0 / zeta
         return tau_init, tau_init * 0.8, tau_init * 1.2
+    if zeta is not None and np.isfinite(zeta) and zeta < 0:
+        tau_init = -1.0 / zeta
+        return tau_init, tau_init * 0.8, tau_init * 1.2
 
     tau_init = tau_init_fallback
     if not np.isfinite(tau_init) or tau_init <= 0:
         tau_init = math.sqrt(default_lo * default_hi)
-
     return tau_init, default_lo, default_hi
 
 
