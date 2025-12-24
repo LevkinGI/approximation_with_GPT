@@ -103,6 +103,7 @@ class DataSet:
     f2_init: float = 0.0
     zeta1: Optional[float] = None
     zeta2: Optional[float] = None
+    additive_const_init: float | None = None
 
     # окончательный результат
     fit: FittingResult | None = field(default_factory=lambda: None)

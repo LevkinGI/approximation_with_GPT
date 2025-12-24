@@ -1407,7 +1407,11 @@ def fit_single(ds: DataSet,
     )
 
     k_init = 1.0
-    C_init = np.mean(y)
+    C_init = (
+        ds.additive_const_init
+        if ds.additive_const_init is not None and np.isfinite(ds.additive_const_init)
+        else np.mean(y)
+    )
     p0 = np.array([
         k_init,
         C_init,

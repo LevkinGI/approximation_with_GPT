@@ -8,6 +8,29 @@ import numpy as np
 from . import DataSet, TimeSeries, RecordMeta, logger, GHZ, C_M_S
 
 
+def _replace_spike_segment(x: np.ndarray, s: np.ndarray, lower: float, upper: float) -> np.ndarray:
+    """Replace values in ``s`` where ``x`` is between ``lower`` and ``upper``.
+
+    The replacement value is taken from the first point after ``upper`` if it
+    exists, otherwise from the last point before ``lower``. Falls back to the
+    original values if neither is available.
+    """
+    mask = (lower < x) & (x < upper)
+    if not np.any(mask):
+        return s
+    after = s[x >= upper]
+    before = s[x <= lower]
+    if after.size:
+        fill = after[0]
+    elif before.size:
+        fill = before[-1]
+    else:
+        fill = s[mask][0]
+    s_copy = s.copy()
+    s_copy[mask] = fill
+    return s_copy
+
+
 def load_records(root: Path) -> List[DataSet]:
     """Читает все *.dat файлы в каталоге *root* (или *root/data*)
     и возвращает список DataSet."""
@@ -34,18 +57,33 @@ def load_records(root: Path) -> List[DataSet]:
         t_all = 2.0 * (x - x0) / C_M_S  # секунды
 
         # Вырезаем выбросы
-        s = np.where((136.9 < x) & (x < 137.05), s[np.where(x>=137.05)][0], s)
-        s = np.where((142.9 < x) & (x < 143.05), s[np.where(x>=143.05)][0], s)
-        s = np.where((132.85 < x) & (x < 132.95), s[np.where(x>=132.95)][0], s)
-        s = np.where((133.15 < x) & (x < 133.25), s[np.where(x>=133.25)][0], s)
+        s = _replace_spike_segment(x, s, 136.9, 137.05)
+        s = _replace_spike_segment(x, s, 142.9, 143.05)
+        s = _replace_spike_segment(x, s, 132.85, 132.95)
+        s = _replace_spike_segment(x, s, 133.15, 133.25)
+
+        pk = int(np.argmax(s))
+        minima_all = np.where(np.diff(np.signbit(np.diff(s))) < 0)[0] + 1
+        left_minima = minima_all[minima_all < pk]
+        right_minima = minima_all[minima_all > pk]
+        left_min_idx = int(left_minima[-1]) if left_minima.size else None
+        right_min_idx = int(right_minima[0]) if right_minima.size else None
+
+        baseline_end = left_min_idx if left_min_idx is not None else pk
+        if baseline_end <= 0:
+            baseline_end = max(pk, 1)
+        additive_const = float(np.median(s[:baseline_end])) if s.size else float("nan")
+        if not np.isfinite(additive_const):
+            additive_const = None
 
         # Обрезаем сигнал сразу после первого минимума справа от пика
-        pk = int(np.argmax(s))
-        minima = np.where(
-            (np.diff(np.signbit(np.diff(s))) < 0)
-            & (np.arange(len(s))[1:-1] > pk)
-        )[0]
-        st = np.min([minima[0] + 1 if minima.size else pk + 10, pk + 2 if tag == "LF" else pk + 5])
+        st_candidates = []
+        if right_min_idx is not None:
+            st_candidates.append(right_min_idx + 1)
+        else:
+            st_candidates.append(pk + 10)
+        st_candidates.append(pk + 2 if tag == "LF" else pk + 5)
+        st = int(np.min(st_candidates))
         t = t_all[st:]
         s = s[st:]
 
@@ -71,7 +109,7 @@ def load_records(root: Path) -> List[DataSet]:
         fs = 1.0 / dt
         ts = TimeSeries(t=t, s=s, meta=RecordMeta(fs=fs))
         datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag,
-                               ts=ts, root=data_dir))
+                               ts=ts, root=data_dir, additive_const_init=additive_const))
         logger.info("Загружен %s: %d точек, fs=%.2f ГГц", path.name, len(t), fs / GHZ)
     logger.info("Загружено %d наборов", len(datasets))
     return datasets
