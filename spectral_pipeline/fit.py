@@ -753,9 +753,11 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         ds_hf.zeta2, tau2_init, 5e-12, 5e-10
     )
 
+    t_all = np.concatenate((t_lf, t_hf))
+    y_all = np.concatenate((y_lf, y_hf))
     k_lf_init = 1
     k_hf_init = 1
-    amp_span = max(np.ptp(np.concatenate((y_lf, y_hf))), 1e-3)
+    amp_span = max(np.ptp(y_all), 1e-3)
     C0_init = 0.1 * amp_span
     duration = max(t_all) - min(t_all) if t_all.size else 0.0
     tau0_init = max(duration / 3 if duration > 0 else 1e-11, 1e-11)
@@ -792,8 +794,6 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         amp_span, max(tau1_hi, tau2_hi, tau0_init * 10),
     ])
 
-    t_all = np.concatenate((t_lf, t_hf))
-    y_all = np.concatenate((y_lf, y_hf))
     split_idx = len(t_lf)
 
     n_lf = y_lf.size
