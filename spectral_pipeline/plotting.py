@@ -618,8 +618,8 @@ def visualize_stacked(
         )
 
     if spectra_HF:
-        spectra_HF.sort(key=lambda tpl: tpl[2])
-        spectra_LF.sort(key=lambda tpl: tpl[2])
+        # spectra_HF.sort(key=lambda tpl: tpl[2])
+        # spectra_LF.sort(key=lambda tpl: tpl[2])
         shift_hf = 1.2 * max(np.nanmax(a_hf) for (_, a_hf, _) in spectra_HF)
         shift_lf = 1.2 * max(np.nanmax(a_lf) for (_, a_lf, _) in spectra_LF)
         shift_f = max(shift_hf, shift_lf)
