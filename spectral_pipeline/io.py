@@ -33,6 +33,12 @@ def load_records(root: Path) -> List[DataSet]:
         x0 = x[np.argmax(s)]
         t_all = 2.0 * (x - x0) / C_M_S  # секунды
 
+        # Вырезаем выбросы
+        s = np.where((136.9 < x) & (x < 137.05), s[np.where(x>=137.05)][0], s)
+        # s = np.where((136.9 < x) & (x < 137.05), s[np.where(x>=137.05)][0], s)
+        # s = np.where((136.9 < x) & (x < 137.05), s[np.where(x>=137.05)][0], s)
+        # s = np.where((136.9 < x) & (x < 137.05), s[np.where(x>=137.05)][0], s)
+
         # Обрезаем сигнал сразу после первого минимума справа от пика
         pk = int(np.argmax(s))
         minima = np.where(
@@ -40,7 +46,6 @@ def load_records(root: Path) -> List[DataSet]:
             & (np.arange(len(s))[1:-1] > pk)
         )[0]
         st = np.min([minima[0] + 1 if minima.size else pk + 10, pk + 2 if tag == "LF" else pk + 5])
-        x = x[st:]
         t = t_all[st:]
         s = s[st:]
 
@@ -48,16 +53,13 @@ def load_records(root: Path) -> List[DataSet]:
         if tag == "LF":
             cutoff = 0.7e-9
             end = np.searchsorted(t, cutoff, "right")
-            x, t, s = x[:end], t[:end], s[:end]
+            t, s = t[:end], s[:end]
 
         # Для HF дополнительно ограничиваем длительность 0.08 нс
         if tag == "HF":
             cutoff = 0.08e-9
             end = np.searchsorted(t, cutoff, "right")
-            x, t, s = x[:end], t[:end], s[:end]
-
-        # Вырезаем выбросы
-        s = np.where((136.9 < x) & (x < 137.05), s[np.where(x>=137.05)][0], s)
+            t, s = t[:end], s[:end]
 
         if len(t) < 10:
             logger.warning("Пропуск %s: слишком короткий ряд", path.name)
