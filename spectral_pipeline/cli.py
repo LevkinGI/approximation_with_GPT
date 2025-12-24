@@ -78,8 +78,8 @@ _PARAM_ROWS = (
     ("Амплитуда ВЧ", lambda fit: fit.A2, lambda fit: fit.A2_err if fit.A2_err is not None else np.nan),
     ("k НЧ", lambda fit: fit.k_lf, lambda fit: fit.k_lf_err if fit.k_lf_err is not None else np.nan),
     ("k ВЧ", lambda fit: fit.k_hf, lambda fit: fit.k_hf_err if fit.k_hf_err is not None else np.nan),
-    ("Константа НЧ", lambda fit: fit.C_lf, lambda fit: fit.C_lf_err if fit.C_lf_err is not None else np.nan),
-    ("Константа ВЧ", lambda fit: fit.C_hf, lambda fit: fit.C_hf_err if fit.C_hf_err is not None else np.nan),
+    ("C_0", lambda fit: fit.C0, lambda fit: fit.C0_err if fit.C0_err is not None else np.nan),
+    ("tau_0, нс", lambda fit: fit.tau0 / NS, lambda fit: fit.tau0_err / NS if fit.tau0_err is not None else np.nan),
 )
 
 
