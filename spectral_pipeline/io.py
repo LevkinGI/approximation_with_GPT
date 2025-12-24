@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List
 import numpy as np
 
-from . import DataSet, TimeSeries, RecordMeta, logger, GHZ, C_M_S
+from . import DataSet, TimeSeries, RecordMeta, logger, GHZ, C_M_S, describe_dataset
 
 
 def _replace_spike_segment(x: np.ndarray, s: np.ndarray, lower: float, upper: float) -> np.ndarray:
@@ -108,8 +108,21 @@ def load_records(root: Path) -> List[DataSet]:
             continue
         fs = 1.0 / dt
         ts = TimeSeries(t=t, s=s, meta=RecordMeta(fs=fs))
-        datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag,
-                               ts=ts, root=data_dir, additive_const_init=additive_const))
-        logger.info("Загружен %s: %d точек, fs=%.2f ГГц", path.name, len(t), fs / GHZ)
+        ds = DataSet(
+            field_mT=field_mT,
+            temp_K=temp_K,
+            tag=tag,
+            ts=ts,
+            root=data_dir,
+            additive_const_init=additive_const,
+        )
+        datasets.append(ds)
+        logger.info(
+            "Загружен %s (%s): %d точек, fs=%.2f ГГц",
+            path.name,
+            describe_dataset(ds),
+            len(t),
+            fs / GHZ,
+        )
     logger.info("Загружено %d наборов", len(datasets))
     return datasets

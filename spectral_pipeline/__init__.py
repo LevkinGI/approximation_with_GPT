@@ -16,7 +16,7 @@ LOG_PATH = log_dir / "pipeline.log"
 logger = logging.getLogger("spectral_pipeline")
 if not logger.handlers:
     fmt = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        "%(asctime)s [%(levelname)s] %(name)s %(module)s:%(lineno)d | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     stream_h = logging.StreamHandler()
@@ -39,6 +39,19 @@ C_M_S = 3e11
 LF_BAND = (0.0, 40 * GHZ)
 HF_BAND = (0.0, 40 * GHZ)
 FREQ_TAG = Literal["LF", "HF"]
+
+
+def describe_dataset(ds: "DataSet") -> str:
+    """Return a compact string describing dataset location and tag.
+
+    Includes temperature, magnetic field, tag and dataset root when available
+    to make log entries easier to correlate with raw files.
+    """
+
+    base = f"T={ds.temp_K}K, H={ds.field_mT}mT, tag={ds.tag}"
+    if ds.root is None:
+        return base
+    return f"{base}, root={ds.root}"
 
 @dataclass(slots=True)
 class RecordMeta:
@@ -113,7 +126,18 @@ class DataSet:
     asd_fft : NDArray | None = None
 
 __all__ = [
-    "DataSet", "FittingResult", "RecordMeta", "TimeSeries",
-    "GHZ", "NS", "PI", "FREQ_TAG", "logger", "LOG_PATH",
-    "C_M_S", "LF_BAND", "HF_BAND",
+    "DataSet",
+    "FittingResult",
+    "RecordMeta",
+    "TimeSeries",
+    "GHZ",
+    "NS",
+    "PI",
+    "FREQ_TAG",
+    "logger",
+    "LOG_PATH",
+    "C_M_S",
+    "LF_BAND",
+    "HF_BAND",
+    "describe_dataset",
 ]
