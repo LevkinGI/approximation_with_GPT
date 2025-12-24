@@ -598,15 +598,29 @@ def _esprit_freqs_and_decay(r: NDArray, fs: float, p: int = 6
     return f, zeta
 
 @njit(fastmath=True, cache=True)
-def _core_signal(t: NDArray, A1, A2, tau1, tau2, f1, f2, phi1, phi2) -> NDArray:
+def _core_signal(
+    t: NDArray,
+    A1,
+    A2,
+    tau1,
+    tau2,
+    f1,
+    f2,
+    phi1,
+    phi2,
+    C0=0.0,
+    tau0=1.0,
+) -> NDArray:
     inv_tau1 = -1.0 / tau1
     inv_tau2 = -1.0 / tau2
+    inv_tau0 = -1.0 / tau0
     omega1 = 2 * np.pi * f1
     omega2 = 2 * np.pi * f2
     
     term1 = A1 * np.exp(t * inv_tau1) * np.cos(omega1 * t + phi1)
     term2 = A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2)
-    return term1 + term2
+    decay = C0 * np.exp(t * inv_tau0)
+    return term1 + term2 + decay
 
 
 def _single_sine_refine(t: NDArray, y: NDArray, f0: float
@@ -627,25 +641,26 @@ def _single_sine_refine(t: NDArray, y: NDArray, f0: float
 
 
 @njit(fastmath=True, cache=True)
-def _numba_residuals(p, t_all, y_all, weights_all, split_idx):
+def _numba_residuals(p, t_all, y_all, weights_all, split_idx, C_lf_fixed, C_hf_fixed):
     # Распаковка параметров
-    # Порядок: k_lf, k_hf, C_lf, C_hf, A1, A2, tau1, tau2, f1, f2, phi1, phi2
+    # Порядок: k_lf, k_hf, A1, A2, tau1, tau2, f1, f2, phi1, phi2, C0, tau0
     k_lf = p[0]
     k_hf = p[1]
-    C_lf = p[2]
-    C_hf = p[3]
-    A1   = p[4]
-    A2   = p[5]
-    tau1 = p[6]
-    tau2 = p[7]
-    f1   = p[8]
-    f2   = p[9]
-    phi1 = p[10]
-    phi2 = p[11]
+    A1   = p[2]
+    A2   = p[3]
+    tau1 = p[4]
+    tau2 = p[5]
+    f1   = p[6]
+    f2   = p[7]
+    phi1 = p[8]
+    phi2 = p[9]
+    C0   = p[10]
+    tau0 = p[11]
 
     # Предварительные вычисления для скорости
     inv_tau1 = -1.0 / tau1
     inv_tau2 = -1.0 / tau2
+    inv_tau0 = -1.0 / tau0
     omega1 = 2.0 * np.pi * f1
     omega2 = 2.0 * np.pi * f2
 
@@ -664,20 +679,22 @@ def _numba_residuals(p, t_all, y_all, weights_all, split_idx):
     for i in range(split_idx):
         t = t_all[i]
         signal = (A1 * np.exp(t * inv_tau1) * np.cos(omega1 * t + phi1) +
-                  A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2))
+                  A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2) +
+                  C0 * np.exp(t * inv_tau0))
         
-        # Применяем модель: (k * signal + C - y) * weight
+        # Применяем модель: (k * signal + C_fixed - y) * weight
         # weight уже содержит в себе w_lf и нормализацию 1/sqrt(n)
-        residuals[i] = (k_lf * signal + C_lf - y_all[i]) * weights_all[i]
+        residuals[i] = (k_lf * signal + C_lf_fixed - y_all[i]) * weights_all[i]
 
     # --- БЛОК HF (от split_idx до конца) ---
     for i in range(split_idx, len(t_all)):
         t = t_all[i]
         signal = (A1 * np.exp(t * inv_tau1) * np.cos(omega1 * t + phi1) +
-                  A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2))
+                  A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2) +
+                  C0 * np.exp(t * inv_tau0))
         
         # Для HF у нас нет временных весов w_lf (они равны 1), только нормализация
-        residuals[i] = (k_hf * signal + C_hf - y_all[i]) * weights_all[i]
+        residuals[i] = (k_hf * signal + C_hf_fixed - y_all[i]) * weights_all[i]
 
     return residuals
 
@@ -738,16 +755,17 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     k_lf_init = 1
     k_hf_init = 1
-    C_lf_init = np.mean(y_lf)
-    C_hf_init = np.mean(y_hf)
+    C0_init = 0.0
+    tau0_init = max(tau1_init, tau2_init, 1e-11)
+    amp_span = max(np.ptp(np.concatenate((y_lf, y_hf))), 1e-3)
 
     p0 = np.array([
         k_lf_init, k_hf_init,
-        C_lf_init, C_hf_init,
         A1_init,    A2_init,
         tau1_init,  tau2_init,
         f1_init,    f2_init,
-        phi1_init,  phi2_init
+        phi1_init,  phi2_init,
+        C0_init,    tau0_init,
     ])
 
     if freq_bounds is None:
@@ -758,19 +776,19 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     lo = np.array([
         0.5, 0.5,
-        C_lf_init - np.std(y_lf), C_hf_init - np.std(y_hf),
         0.0, 0.0,
         tau1_lo, tau2_lo,
         f1_lo, f2_lo,
-        -PI-1e-5, -PI-1e-5
+        -PI-1e-5, -PI-1e-5,
+        -amp_span, 1e-12,
     ])
     hi = np.array([
         2, 2,
-        C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf),
         A1_init * 2, A2_init * 2,
         tau1_hi, tau2_hi,
         f1_hi, f2_hi,
-        PI+1e-5, PI+1e-5
+        PI+1e-5, PI+1e-5,
+        amp_span, max(tau1_hi, tau2_hi, tau0_init * 10),
     ])
 
     t_all = np.concatenate((t_lf, t_hf))
@@ -786,7 +804,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     weights_all = np.concatenate((weights_lf, weights_hf))
 
     def residuals(p):
-        return _numba_residuals(p, t_all, y_all, weights_all, split_idx)
+        return _numba_residuals(p, t_all, y_all, weights_all, split_idx, ds_lf.baseline_const, ds_hf.baseline_const)
 
     sol = least_squares(
         residuals,
@@ -819,20 +837,21 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     sigma_k_lf = _sigma(0)
     sigma_k_hf = _sigma(1)
-    sigma_C_lf = _sigma(2)
-    sigma_C_hf = _sigma(3)
-    sigma_A1 = _sigma(4)
-    sigma_A2 = _sigma(5)
-    sigma_tau1 = _sigma(6)
-    sigma_tau2 = _sigma(7)
-    sigma_f1 = _sigma(8)
-    sigma_f2 = _sigma(9)
-    sigma_phi1 = _sigma(10)
-    sigma_phi2 = _sigma(11)
+    sigma_A1 = _sigma(2)
+    sigma_A2 = _sigma(3)
+    sigma_tau1 = _sigma(4)
+    sigma_tau2 = _sigma(5)
+    sigma_f1 = _sigma(6)
+    sigma_f2 = _sigma(7)
+    sigma_phi1 = _sigma(8)
+    sigma_phi2 = _sigma(9)
+    sigma_C0 = _sigma(10)
+    sigma_tau0 = _sigma(11)
 
-    (k_lf, k_hf, C_lf, C_hf,
+    (k_lf, k_hf,
       A1, A2, tau1, tau2,
-      f1_fin, f2_fin, phi1_fin, phi2_fin) = p
+      f1_fin, f2_fin, phi1_fin, phi2_fin,
+      C0, tau0) = p
     logger.debug(
         "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
         f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
@@ -848,14 +867,18 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         A2=A2,
         k_lf=k_lf,
         k_hf=k_hf,
-        C_lf=C_lf,
-        C_hf=C_hf,
+        C_lf=ds_lf.baseline_const,
+        C_hf=ds_hf.baseline_const,
+        C0=C0,
+        tau0=tau0,
         f1_err=sigma_f1,
         f2_err=sigma_f2,
         k_lf_err=sigma_k_lf,
         k_hf_err=sigma_k_hf,
-        C_lf_err=sigma_C_lf,
-        C_hf_err=sigma_C_hf,
+        C_lf_err=None,
+        C_hf_err=None,
+        C0_err=sigma_C0,
+        tau0_err=sigma_tau0,
         A1_err=sigma_A1,
         A2_err=sigma_A2,
         tau1_err=sigma_tau1,
@@ -1333,22 +1356,24 @@ def process_pair(
         return best_fit
 
 @njit(fastmath=True, cache=True)
-def _numba_residuals_single(p, t, y, w):
+def _numba_residuals_single(p, t, y, w, C_fixed):
     # Распаковка параметров (порядок должен совпадать с p0)
     k    = p[0]
-    C    = p[1]
-    A1   = p[2]
-    A2   = p[3]
-    tau1 = p[4]
-    tau2 = p[5]
-    f1   = p[6]
-    f2   = p[7]
-    phi1 = p[8]
-    phi2 = p[9]
+    A1   = p[1]
+    A2   = p[2]
+    tau1 = p[3]
+    tau2 = p[4]
+    f1   = p[5]
+    f2   = p[6]
+    phi1 = p[7]
+    phi2 = p[8]
+    C0   = p[9]
+    tau0 = p[10]
 
     # Предварительные расчеты констант
     inv_tau1 = -1.0 / tau1
     inv_tau2 = -1.0 / tau2
+    inv_tau0 = -1.0 / tau0
     omega1 = 2.0 * np.pi * f1
     omega2 = 2.0 * np.pi * f2
 
@@ -1360,10 +1385,11 @@ def _numba_residuals_single(p, t, y, w):
         ti = t[i]
         # Вычисляем сигнал
         core = (A1 * np.exp(ti * inv_tau1) * np.cos(omega1 * ti + phi1) +
-                A2 * np.exp(ti * inv_tau2) * np.cos(omega2 * ti + phi2))
+                A2 * np.exp(ti * inv_tau2) * np.cos(omega2 * ti + phi2) +
+                C0 * np.exp(ti * inv_tau0))
         
         # Вычисляем остаток с учетом весов
-        res[i] = w[i] * (k * core + C - y[i])
+        res[i] = w[i] * (k * core + C_fixed - y[i])
 
     return res
 
@@ -1407,10 +1433,11 @@ def fit_single(ds: DataSet,
     )
 
     k_init = 1.0
-    C_init = np.mean(y)
+    C0_init = 0.0
+    tau0_init = max(tau1_init, tau2_init, 1e-11)
+    amp_span = max(np.ptp(y), 1e-3)
     p0 = np.array([
         k_init,
-        C_init,
         A1_init,
         A2_init,
         tau1_init,
@@ -1419,6 +1446,8 @@ def fit_single(ds: DataSet,
         f2_init,
         phi1_init,
         phi2_init,
+        C0_init,
+        tau0_init,
     ])
 
     if freq_bounds is None:
@@ -1429,7 +1458,6 @@ def fit_single(ds: DataSet,
 
     lo = np.array([
         0.5,
-        C_init - np.std(y),
         0.0,
         0.0,
         tau1_lo,
@@ -1438,10 +1466,11 @@ def fit_single(ds: DataSet,
         f2_lo,
         -PI-1e-5,
         -PI-1e-5,
+        -amp_span,
+        1e-12,
     ])
     hi = np.array([
         2.0,
-        C_init + np.std(y),
         A1_init * 2,
         A2_init * 2,
         tau1_hi,
@@ -1450,10 +1479,12 @@ def fit_single(ds: DataSet,
         f2_hi,
         PI+1e-5,
         PI+1e-5,
+        amp_span,
+        max(tau1_hi, tau2_hi, tau0_init * 10),
     ])
 
     def residuals(p):
-        return _numba_residuals_single(p, t, y, w)
+        return _numba_residuals_single(p, t, y, w, ds.baseline_const)
 
     sol = least_squares(
         residuals,
@@ -1488,18 +1519,19 @@ def fit_single(ds: DataSet,
         return math.sqrt(val)
 
     sigma_k = _sigma(0)
-    sigma_C = _sigma(1)
-    sigma_A1 = _sigma(2)
-    sigma_A2 = _sigma(3)
-    sigma_tau1 = _sigma(4)
-    sigma_tau2 = _sigma(5)
-    sigma_f1 = _sigma(6)
-    sigma_f2 = _sigma(7)
-    sigma_phi1 = _sigma(8)
-    sigma_phi2 = _sigma(9)
+    sigma_A1 = _sigma(1)
+    sigma_A2 = _sigma(2)
+    sigma_tau1 = _sigma(3)
+    sigma_tau2 = _sigma(4)
+    sigma_f1 = _sigma(5)
+    sigma_f2 = _sigma(6)
+    sigma_phi1 = _sigma(7)
+    sigma_phi2 = _sigma(8)
+    sigma_C0 = _sigma(9)
+    sigma_tau0 = _sigma(10)
 
-    (k_fin, C_fin, A1_fin, A2_fin, tau1_fin, tau2_fin,
-     f1_fin, f2_fin, phi1_fin, phi2_fin) = p
+    (k_fin, A1_fin, A2_fin, tau1_fin, tau2_fin,
+     f1_fin, f2_fin, phi1_fin, phi2_fin, C0_fin, tau0_fin) = p
     logger.debug(
         "Результат LF-only: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
         f1_fin / GHZ,
@@ -1521,14 +1553,18 @@ def fit_single(ds: DataSet,
             A2=A2_fin,
             k_lf=k_fin,
             k_hf=float("nan"),
-            C_lf=C_fin,
+            C_lf=ds.baseline_const,
             C_hf=float("nan"),
+            C0=C0_fin,
+            tau0=tau0_fin,
             f1_err=sigma_f1,
             f2_err=sigma_f2,
             k_lf_err=sigma_k,
             k_hf_err=float("nan"),
-            C_lf_err=sigma_C,
+            C_lf_err=None,
             C_hf_err=float("nan"),
+            C0_err=sigma_C0,
+            tau0_err=sigma_tau0,
             A1_err=sigma_A1,
             A2_err=sigma_A2,
             tau1_err=sigma_tau1,
