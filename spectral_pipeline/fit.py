@@ -700,7 +700,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         w[t >= borders[1]] = 0.5
         return w
 
-    w_lf = _piecewise_time_weights(t_lf)
+    w_lf_raw = _piecewise_time_weights(t_lf)
 
     f1_init = ds_lf.f1_init
     f2_init = ds_hf.f2_init
