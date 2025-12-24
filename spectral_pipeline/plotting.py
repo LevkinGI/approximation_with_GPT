@@ -215,22 +215,21 @@ def visualize_stacked(
         tmin_lf, tmax_lf = ds_lf.ts.t[0] / NS, ds_lf.ts.t[-1] / NS
         tmin_hf, tmax_hf = ds_hf.ts.t[0] / NS, ds_hf.ts.t[-1] / NS
 
-        for col, (tmin, tmax) in ((1, (tmin_lf, tmax_lf)), (2, (tmin_hf, tmax_hf))):
-            fig.add_trace(
-                go.Scattergl(
-                    x=[tmin, tmax],
-                    y=[shift, shift],
-                    line=dict(width=1, color=BASE_CLR),
-                    mode="lines",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ),
-                row=1,
-                col=col,
-            )
+        baseline_lf = ds_lf.baseline_const
+        fig.add_trace(
+            go.Scattergl(
+                x=[tmin_lf, tmax_lf],
+                y=[shift + baseline_lf, shift + baseline_lf],
+                line=dict(width=1, color=BASE_CLR),
+                mode="lines",
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=1,
+        )
 
         p = ds_lf.fit
-        baseline_lf = ds_lf.baseline_const
         y = ds_lf.ts.s + baseline_lf + shift
         fig.add_trace(
             go.Scattergl(
@@ -310,6 +309,18 @@ def visualize_stacked(
 
         p = ds_hf.fit
         baseline_hf = ds_hf.baseline_const
+        fig.add_trace(
+            go.Scattergl(
+                x=[tmin_hf, tmax_hf],
+                y=[shift + baseline_hf, shift + baseline_hf],
+                line=dict(width=1, color=BASE_CLR),
+                mode="lines",
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=2,
+        )
         y = ds_hf.ts.s + baseline_hf + shift
         fig.add_trace(
             go.Scattergl(
