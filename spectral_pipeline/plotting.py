@@ -92,15 +92,16 @@ def visualize_stacked(
                     ds.ts.t, p.A1, p.A2,
                     1 / p.zeta1, 1 / p.zeta2,
                     p.f1, p.f2, p.phi1, p.phi2,
+                    p.C0, p.tau0,
                 )
                 y_fit = (
-                    p.k_lf * core + p.C_lf
+                    p.k_lf * core + ds.baseline_const
                     if ds.tag == "LF"
-                    else p.k_hf * core + p.C_hf
+                    else p.k_hf * core + ds.baseline_const
                 )
                 ranges.append(np.ptp(y_fit[mask]))
             else:
-                ranges.append(np.ptp(ds.ts.s))
+                ranges.append(np.ptp(ds.ts.s + ds.baseline_const))
 
     y_step = 0.8 * max(ranges + [1e-3])
 
@@ -228,10 +229,9 @@ def visualize_stacked(
                 col=col,
             )
 
-        if ds_lf.fit:
-            p = ds_lf.fit
-        y = ds_lf.ts.s + shift
-        y -= p.C_lf if ds_lf.fit else ds_lf.ts.s.mean()
+        p = ds_lf.fit
+        baseline_lf = ds_lf.baseline_const
+        y = ds_lf.ts.s + baseline_lf + shift
         fig.add_trace(
             go.Scattergl(
                 x=ds_lf.ts.t / NS,
@@ -254,10 +254,14 @@ def visualize_stacked(
                 p.f2,
                 p.phi1,
                 p.phi2,
+                p.f1, p.f2, p.phi1, p.phi2,
+                p.C0, p.tau0,
             )
-            y_fit = p.k_lf * core + shift
-            y_lf = p.k_lf * (p.A1 * np.exp(-ds_lf.ts.t * p.zeta1) * np.cos(2*np.pi*p.f1*ds_lf.ts.t + p.phi1)) + shift
-            y_hf = p.k_lf * (p.A2 * np.exp(-ds_lf.ts.t * p.zeta2) * np.cos(2*np.pi*p.f2*ds_lf.ts.t + p.phi2)) + shift
+            exp_term = p.k_lf * (p.C0 * np.exp(-ds_lf.ts.t / p.tau0))
+            y_fit = p.k_lf * core + baseline_lf + shift
+            y_lf = p.k_lf * (p.A1 * np.exp(-ds_lf.ts.t * p.zeta1) * np.cos(2*np.pi*p.f1*ds_lf.ts.t + p.phi1)) + baseline_lf + shift
+            y_hf = p.k_lf * (p.A2 * np.exp(-ds_lf.ts.t * p.zeta2) * np.cos(2*np.pi*p.f2*ds_lf.ts.t + p.phi2)) + baseline_lf + shift
+            y_exp = exp_term + baseline_lf + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_lf.ts.t / NS,
@@ -292,11 +296,22 @@ def visualize_stacked(
                 1,
                 1,
             )
+            fig.add_trace(
+                go.Scattergl(
+                    x=ds_lf.ts.t / NS,
+                    y=y_exp,
+                    opacity=0.6,
+                    mode="lines",
+                    line=dict(width=2, color='rgb(117,112,179)'),
+                    name=f"{varying} = {var_value} {var_label} exp",
+                ),
+                1,
+                1,
+            )
 
-        if ds_hf.fit:
-            p = ds_hf.fit
-        y = ds_hf.ts.s + shift
-        y -= p.C_hf if ds_hf.fit else ds_hf.ts.s.mean()
+        p = ds_hf.fit
+        baseline_hf = ds_hf.baseline_const
+        y = ds_hf.ts.s + baseline_hf + shift
         fig.add_trace(
             go.Scattergl(
                 x=ds_hf.ts.t / NS,
@@ -319,10 +334,14 @@ def visualize_stacked(
                 p.f2,
                 p.phi1,
                 p.phi2,
+                p.f1, p.f2, p.phi1, p.phi2,
+                p.C0, p.tau0,
             )
-            y_fit = p.k_hf * core + shift
-            y_lf = p.k_hf * (p.A1 * np.exp(-ds_hf.ts.t * p.zeta1) * np.cos(2*np.pi*p.f1*ds_hf.ts.t + p.phi1)) + shift
-            y_hf = p.k_hf * (p.A2 * np.exp(-ds_hf.ts.t * p.zeta2) * np.cos(2*np.pi*p.f2*ds_hf.ts.t + p.phi2)) + shift
+            exp_term = p.k_hf * (p.C0 * np.exp(-ds_hf.ts.t / p.tau0))
+            y_fit = p.k_hf * core + baseline_hf + shift
+            y_lf = p.k_hf * (p.A1 * np.exp(-ds_hf.ts.t * p.zeta1) * np.cos(2*np.pi*p.f1*ds_hf.ts.t + p.phi1)) + baseline_hf + shift
+            y_hf = p.k_hf * (p.A2 * np.exp(-ds_hf.ts.t * p.zeta2) * np.cos(2*np.pi*p.f2*ds_hf.ts.t + p.phi2)) + baseline_hf + shift
+            y_exp = exp_term + baseline_hf + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_hf.ts.t / NS,
@@ -353,6 +372,18 @@ def visualize_stacked(
                     mode="lines",
                     line=dict(width=2, color='rgb(166,118,29)'),
                     name=f"{varying} = {var_value} {var_label}",
+                ),
+                1,
+                2,
+            )
+            fig.add_trace(
+                go.Scattergl(
+                    x=ds_hf.ts.t / NS,
+                    y=y_exp,
+                    opacity=0.6,
+                    mode="lines",
+                    line=dict(width=2, color='rgb(117,112,179)'),
+                    name=f"{varying} = {var_value} {var_label} exp",
                 ),
                 1,
                 2,
