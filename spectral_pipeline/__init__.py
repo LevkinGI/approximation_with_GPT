@@ -62,14 +62,18 @@ class FittingResult:
     A2: float
     k_lf: float
     k_hf: float
-    C_lf: float
-    C_hf: float
+    C_lf: float  # фиксированные константы, не оптимизируются
+    C_hf: float  # фиксированные константы, не оптимизируются
+    C0: float = 0.0
+    tau0: float = 0.0
     f1_err: float | None = None
     f2_err: float | None = None
     k_lf_err: float | None = None
     k_hf_err: float | None = None
     C_lf_err: float | None = None
     C_hf_err: float | None = None
+    C0_err: float | None = None
+    tau0_err: float | None = None
     A1_err: float | None = None
     A2_err: float | None = None
     tau1_err: float | None = None
@@ -86,7 +90,7 @@ class DataSet:
     temp_K : температура (К)
     tag    : диапазон сигнала ('LF' или 'HF')
     ts     : временной ряд
-    baseline_const: добавленная константа уровня сигнала
+    baseline_const: добавленная константа уровня сигнала (фиксированная, не оптимизируется)
 
     f1_init, f2_init – грубые оценки частот
     zeta1, zeta2     – оценки затухания
