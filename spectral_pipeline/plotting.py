@@ -254,7 +254,6 @@ def visualize_stacked(
                 p.f2,
                 p.phi1,
                 p.phi2,
-                p.f1, p.f2, p.phi1, p.phi2,
                 p.C0, p.tau0,
             )
             exp_term = p.k_lf * (p.C0 * np.exp(-ds_lf.ts.t / p.tau0))
@@ -334,7 +333,6 @@ def visualize_stacked(
                 p.f2,
                 p.phi1,
                 p.phi2,
-                p.f1, p.f2, p.phi1, p.phi2,
                 p.C0, p.tau0,
             )
             exp_term = p.k_hf * (p.C0 * np.exp(-ds_hf.ts.t / p.tau0))
