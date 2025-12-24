@@ -696,8 +696,8 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
             return np.ones_like(t)
         borders = t_min + np.array([1, 2]) * t_len / 3
         w = np.ones_like(t)
-        w[t >= borders[0]] = 0.8
-        w[t >= borders[1]] = 0.5
+        w[t >= borders[0]] = 1
+        w[t >= borders[1]] = 1
         return w
 
     w_lf_raw = _piecewise_time_weights(t_lf)
