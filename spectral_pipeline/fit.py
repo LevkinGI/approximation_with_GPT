@@ -755,9 +755,10 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     k_lf_init = 1
     k_hf_init = 1
-    C0_init = 0.0
-    tau0_init = max(tau1_init, tau2_init, 1e-11)
     amp_span = max(np.ptp(np.concatenate((y_lf, y_hf))), 1e-3)
+    C0_init = 0.1 * amp_span
+    duration = max(t_all) - min(t_all) if t_all.size else 0.0
+    tau0_init = max(duration / 3 if duration > 0 else 1e-11, 1e-11)
 
     p0 = np.array([
         k_lf_init, k_hf_init,
@@ -780,7 +781,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         tau1_lo, tau2_lo,
         f1_lo, f2_lo,
         -PI-1e-5, -PI-1e-5,
-        -amp_span, 1e-12,
+        -amp_span, max(tau0_init / 10, 1e-12),
     ])
     hi = np.array([
         2, 2,
@@ -1433,9 +1434,10 @@ def fit_single(ds: DataSet,
     )
 
     k_init = 1.0
-    C0_init = 0.0
-    tau0_init = max(tau1_init, tau2_init, 1e-11)
     amp_span = max(np.ptp(y), 1e-3)
+    C0_init = 0.1 * amp_span
+    duration = t[-1] - t[0] if t.size else 0.0
+    tau0_init = max(duration / 3 if duration > 0 else 1e-11, 1e-11)
     p0 = np.array([
         k_init,
         A1_init,
@@ -1467,7 +1469,7 @@ def fit_single(ds: DataSet,
         -PI-1e-5,
         -PI-1e-5,
         -amp_span,
-        1e-12,
+        max(tau0_init / 10, 1e-12),
     ])
     hi = np.array([
         2.0,
