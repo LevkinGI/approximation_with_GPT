@@ -555,6 +555,47 @@ def visualize_stacked(
     fig.update_yaxes(title_text="Decay time (ns)", row=2, col=4)
     fig.update_yaxes(title_text="Amplitude", row=3, col=4)
 
+    def _calc_range(values: list[float], errors: list[float], *, enforce_zero: bool = False, clamp_zero_if_needed: bool = False):
+        if not values:
+            return None
+        vals = np.array(values, dtype=float)
+        errs = np.nan_to_num(np.array(errors, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+        v_min = float(np.min(vals))
+        v_max = float(np.max(vals))
+        span = v_max - v_min
+        low_candidate = v_min - 0.2 * span
+        high_candidate = v_max + 0.2 * span
+        below = np.any(vals - errs < low_candidate)
+        above = np.any(vals + errs > high_candidate)
+        if not (below or above):
+            return None
+        if enforce_zero:
+            low = 0.0
+        elif clamp_zero_if_needed and np.any(vals - errs < 0):
+            low = max(0.0, low_candidate)
+        else:
+            low = low_candidate
+        return [low, high_candidate]
+
+    def _update_axis_range(data_dict, *, row: int, enforce_zero: bool = False, clamp_zero_if_needed: bool = False):
+        vals: list[float] = []
+        errs: list[float] = []
+        for _, v1, v2, e1, e2 in data_dict.values():
+            vals.extend([v1, v2])
+            errs.extend([e1, e2])
+        rng = _calc_range(vals, errs, enforce_zero=enforce_zero, clamp_zero_if_needed=clamp_zero_if_needed)
+        if rng is not None:
+            fig.update_yaxes(range=rng, row=row, col=4)
+
+    target_freq = freq_vs_T if varying == "T" else freq_vs_H
+    target_tau = tau_vs_T if varying == "T" else tau_vs_H
+    target_amp = amp_vs_T if varying == "T" else amp_vs_H
+
+    _update_axis_range(target_freq, row=1, clamp_zero_if_needed=True)
+    _update_axis_range(target_tau, row=2, enforce_zero=True, clamp_zero_if_needed=True)
+    _update_axis_range(target_amp, row=3, clamp_zero_if_needed=True)
+    fig.update_yaxes(rangemode="tozero", row=2, col=4)
+
     if theory_curves is not None:
         pass
         axis = theory_curves.axis
