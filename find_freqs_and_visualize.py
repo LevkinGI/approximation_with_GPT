@@ -24,6 +24,15 @@ if __name__ == '__main__':
     )
     parser.set_defaults(use_theory_guess=True)
     args = parser.parse_args()
-    main(args.data_dir, do_plot=not args.no_plot,
-         log_level=args.log_level,
-         use_theory_guess=args.use_theory_guess)
+    try:
+        main(
+            args.data_dir,
+            do_plot=not args.no_plot,
+            log_level=args.log_level,
+            use_theory_guess=args.use_theory_guess,
+        )
+    except Exception as exc:  # pragma: no cover - CLI safety net
+        from spectral_pipeline import logger
+
+        logger.exception("Критическая ошибка при запуске CLI: %s", exc)
+        raise

@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from openpyxl.styles import Border, Side, Alignment
 
-from . import DataSet, GHZ, NS, logger, LOG_PATH
+from . import DataSet, GHZ, NS, logger, LOG_PATH, describe_dataset
 from .io import load_records
 from .fit import process_pair, process_lf_only
 from .plotting import visualize_stacked
@@ -211,27 +211,32 @@ def main(
             if axis == 'H' and ds_lf.field_mT >= val:
                 use_lf_only = True
         if use_lf_only or ds_hf is None:
+            desc = describe_dataset(ds_lf)
             try:
                 fit = process_lf_only(ds_lf, use_theory_guess=use_theory_guess)
-            except Exception as e:
-                logger.error("Ошибка обработки %s: %s", key, e)
+            except Exception:
+                logger.exception("Ошибка обработки LF-only %s", desc)
             else:
                 if fit is not None:
                     success_count += 1
                     ds_hf = ds_hf or ds_lf
                     triples.append((ds_lf, ds_hf))
         else:
+            desc = f"{describe_dataset(ds_lf)} | HF={describe_dataset(ds_hf)}"
             try:
                 fit = process_pair(ds_lf, ds_hf, use_theory_guess=use_theory_guess)
-            except Exception as e:
-                logger.error("Ошибка обработки %s: %s", key, e)
+            except Exception:
+                logger.exception("Ошибка обработки пары %s", desc)
             else:
                 if fit is not None:
                     success_count += 1
                     triples.append((ds_lf, ds_hf))
     logger.info("Успешно аппроксимировано пар: %d", success_count)
     if do_plot and success_count:
-        visualize_stacked(triples, use_theory_guess=use_theory_guess)
+        try:
+            visualize_stacked(triples, use_theory_guess=use_theory_guess)
+        except Exception as exc:
+            logger.exception("Ошибка при построении визуализации: %s", exc)
     out_excel = Path(excel_path) if excel_path else None
     if success_count:
         export_freq_tables(triples, root, outfile=out_excel)
@@ -248,7 +253,10 @@ def demo(data_dir: str | Path = ".", *, use_theory_guess: bool = True):
     )
     if not triples:
         raise RuntimeError("Не найдено корректных пар LF/HF")
-    visualize_stacked(triples, use_theory_guess=use_theory_guess)
+    try:
+        visualize_stacked(triples, use_theory_guess=use_theory_guess)
+    except Exception as exc:
+        logger.exception("Ошибка при построении визуализации: %s", exc)
     print("График открыт в браузере")
 
 
