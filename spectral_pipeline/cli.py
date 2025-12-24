@@ -44,24 +44,42 @@ def _find_crossing(root: str, field_mT: int, temp_K: int):
 
 
 _PARAM_ROWS = (
-    ("Частота НЧ, ГГц", lambda fit: fit.f1 / GHZ),
-    ("Частота ВЧ, ГГц", lambda fit: fit.f2 / GHZ),
+    (
+        "Частота НЧ, ГГц",
+        lambda fit: fit.f1 / GHZ,
+        lambda fit: fit.f1_err / GHZ if fit.f1_err is not None else np.nan,
+    ),
+    (
+        "Частота ВЧ, ГГц",
+        lambda fit: fit.f2 / GHZ,
+        lambda fit: fit.f2_err / GHZ if fit.f2_err is not None else np.nan,
+    ),
     (
         "Время затухания НЧ, нс",
         lambda fit: (1.0 / fit.zeta1) / NS if fit.zeta1 else np.nan,
+        lambda fit: fit.tau1_err / NS if fit.tau1_err is not None else np.nan,
     ),
     (
         "Время затухания ВЧ, нс",
         lambda fit: (1.0 / fit.zeta2) / NS if fit.zeta2 else np.nan,
+        lambda fit: fit.tau2_err / NS if fit.tau2_err is not None else np.nan,
     ),
-    ("Начальная фаза НЧ, рад", lambda fit: fit.phi1),
-    ("Начальная фаза ВЧ, рад", lambda fit: fit.phi2),
-    ("Амплитуда НЧ", lambda fit: fit.A1),
-    ("Амплитуда ВЧ", lambda fit: fit.A2),
-    ("k НЧ", lambda fit: fit.k_lf),
-    ("k ВЧ", lambda fit: fit.k_hf),
-    ("Константа НЧ", lambda fit: fit.C_lf),
-    ("Константа ВЧ", lambda fit: fit.C_hf),
+    (
+        "Начальная фаза НЧ, рад",
+        lambda fit: fit.phi1,
+        lambda fit: fit.phi1_err if fit.phi1_err is not None else np.nan,
+    ),
+    (
+        "Начальная фаза ВЧ, рад",
+        lambda fit: fit.phi2,
+        lambda fit: fit.phi2_err if fit.phi2_err is not None else np.nan,
+    ),
+    ("Амплитуда НЧ", lambda fit: fit.A1, lambda fit: fit.A1_err if fit.A1_err is not None else np.nan),
+    ("Амплитуда ВЧ", lambda fit: fit.A2, lambda fit: fit.A2_err if fit.A2_err is not None else np.nan),
+    ("k НЧ", lambda fit: fit.k_lf, lambda fit: fit.k_lf_err if fit.k_lf_err is not None else np.nan),
+    ("k ВЧ", lambda fit: fit.k_hf, lambda fit: fit.k_hf_err if fit.k_hf_err is not None else np.nan),
+    ("Константа НЧ", lambda fit: fit.C_lf, lambda fit: fit.C_lf_err if fit.C_lf_err is not None else np.nan),
+    ("Константа ВЧ", lambda fit: fit.C_hf, lambda fit: fit.C_hf_err if fit.C_hf_err is not None else np.nan),
 )
 
 
@@ -115,11 +133,15 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
     if not axis_vals:
         logger.warning("Нет данных после группировки для экспорта таблицы")
         return
+    rows = []
+    for name, val_fn, err_fn in _PARAM_ROWS:
+        rows.append((name, val_fn))
+        rows.append((f"Погр. {name}", err_fn))
     data = {}
     for val in axis_vals:
         fit = selected[val]["fit"] if val in selected else None
         col = []
-        for _, fn in _PARAM_ROWS:
+        for _, fn in rows:
             if fit is None:
                 col.append(np.nan)
             else:
@@ -128,7 +150,7 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
                 except Exception:
                     col.append(np.nan)
         data[val] = col
-    df = pd.DataFrame(data, index=[name for name, _ in _PARAM_ROWS])
+    df = pd.DataFrame(data, index=[name for name, _ in rows])
     df.index.name = f"{axis_label}, {axis_unit}"
     sheet_name = "parameters"
     out_path = outfile if outfile else root / f"approximation_({root.name}).xlsx"
