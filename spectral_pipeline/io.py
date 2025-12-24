@@ -35,9 +35,9 @@ def load_records(root: Path) -> List[DataSet]:
 
         # Вырезаем выбросы
         s = np.where((136.9 < x) & (x < 137.05), s[np.where(x>=137.05)][0], s)
-        # s = np.where((136.9 < x) & (x < 137.05), s[np.where(x>=137.05)][0], s)
-        # s = np.where((136.9 < x) & (x < 137.05), s[np.where(x>=137.05)][0], s)
-        # s = np.where((136.9 < x) & (x < 137.05), s[np.where(x>=137.05)][0], s)
+        s = np.where((142.9 < x) & (x < 143.05), s[np.where(x>=143.05)][0], s)
+        s = np.where((132.85 < x) & (x < 132.95), s[np.where(x>=132.95)][0], s)
+        s = np.where((133.15 < x) & (x < 133.25), s[np.where(x>=133.25)][0], s)
 
         # Обрезаем сигнал сразу после первого минимума справа от пика
         pk = int(np.argmax(s))
