@@ -829,7 +829,6 @@ def process_pair(
             (zeta_all > -5e8)
             & (HF_BAND[0] <= f_all)
             & (f_all <= HF_BAND[1])
-            & (np.abs(f_all - f2_rough) <= 7 * GHZ)
         )
         logger.debug("ESPRIT HF filtered: %s", np.round(f_all[mask_hf] / GHZ, 3))
         if not np.any(mask_hf):
@@ -848,11 +847,12 @@ def process_pair(
                 f"({ds_hf.temp_K}, {ds_hf.field_mT}): ESPRIT не дал HF-кандидатов"
             )
 
-        range_hf = (
-            (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ)
-            if f2_rough is not None
-            else HF_BAND
-        )
+        # range_hf = (
+        #     (f2_rough - 5 * GHZ, f2_rough + 5 * GHZ)
+        #     if f2_rough is not None
+        #     else HF_BAND
+        # )
+        range_hf = HF_BAND
         logger.info(
             "HF fallback range: %.1f–%.1f ГГц",
             range_hf[0] / GHZ,
@@ -880,7 +880,6 @@ def process_pair(
             (zeta_all > 0)
             & (LF_BAND[0] <= f_all)
             & (f_all <= LF_BAND[1])
-            & (np.abs(f_all - f1_rough) <= 5 * GHZ)
         )
         logger.debug("ESPRIT LF filtered: %s", np.round(f_all[mask_lf] / GHZ, 3))
         if np.any(mask_lf):
@@ -891,11 +890,12 @@ def process_pair(
             )
             lf_c = []
 
-        range_lf = (
-            (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ)
-            if f1_rough is not None
-            else LF_BAND
-        )
+        # range_lf = (
+        #     (f1_rough - 5 * GHZ, f1_rough + 5 * GHZ)
+        #     if f1_rough is not None
+        #     else LF_BAND
+        # )
+        range_lf = LF_BAND
         logger.info(
             "LF fallback range: %.1f–%.1f ГГц",
             range_lf[0] / GHZ,
