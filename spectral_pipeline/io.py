@@ -28,7 +28,7 @@ def _local_minima_indices(signal: np.ndarray) -> np.ndarray:
         if signs[i] == 0:
             signs[i] = signs[i + 1]
     sign_changes = np.diff(signs)
-    minima = np.where(sign_changes > 0)[0] + 1
+    minima = np.where(sign_changes < 0)[0] + 1
     return minima.astype(int)
 
 
@@ -103,7 +103,7 @@ def load_records(root: Path) -> List[DataSet]:
         # Обрезаем сигнал сразу после первого минимума справа от пика
         st_candidates = []
         if right_min_idx is not None:
-            st_candidates.append(right_min_idx + 1)
+            st_candidates.append(right_min_idx)
         else:
             st_candidates.append(pk + 10)
         st_candidates.append(pk + 2 if tag == "LF" else pk + 5)
