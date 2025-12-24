@@ -8,6 +8,22 @@ import numpy as np
 from . import DataSet, TimeSeries, RecordMeta, logger, GHZ, C_M_S
 
 
+def _estimate_additive_const(signal: np.ndarray, peak_idx: int) -> float:
+    """Оценивает аддитивную константу по медиане участка до пика."""
+    if signal.size == 0:
+        return 0.0
+    minima_before = np.where(
+        (np.diff(np.signbit(np.diff(signal))) < 0)
+        & (np.arange(len(signal))[1:-1] < peak_idx)
+    )[0]
+    cutoff = minima_before[-1] + 1 if minima_before.size else peak_idx
+    if peak_idx <= 0:
+        cutoff = max(cutoff, 1)
+    cutoff = max(1, min(int(cutoff), int(peak_idx) if peak_idx > 0 else len(signal)))
+    cutoff = min(cutoff, signal.size)
+    return float(np.median(signal[:cutoff]))
+
+
 def load_records(root: Path) -> List[DataSet]:
     """Читает все *.dat файлы в каталоге *root* (или *root/data*)
     и возвращает список DataSet."""
@@ -39,8 +55,10 @@ def load_records(root: Path) -> List[DataSet]:
         s = np.where((132.85 < x) & (x < 132.95), s[np.where(x>=132.95)][0], s)
         s = np.where((133.15 < x) & (x < 133.25), s[np.where(x>=133.25)][0], s)
 
-        # Обрезаем сигнал сразу после первого минимума справа от пика
         pk = int(np.argmax(s))
+        additive_const = _estimate_additive_const(s, pk)
+
+        # Обрезаем сигнал сразу после первого минимума справа от пика
         minima = np.where(
             (np.diff(np.signbit(np.diff(s))) < 0)
             & (np.arange(len(s))[1:-1] > pk)
@@ -70,8 +88,16 @@ def load_records(root: Path) -> List[DataSet]:
             continue
         fs = 1.0 / dt
         ts = TimeSeries(t=t, s=s, meta=RecordMeta(fs=fs))
-        datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag,
-                               ts=ts, root=data_dir))
+        datasets.append(
+            DataSet(
+                field_mT=field_mT,
+                temp_K=temp_K,
+                tag=tag,
+                ts=ts,
+                root=data_dir,
+                additive_const=additive_const,
+            )
+        )
         logger.info("Загружен %s: %d точек, fs=%.2f ГГц", path.name, len(t), fs / GHZ)
     logger.info("Загружено %d наборов", len(datasets))
     return datasets

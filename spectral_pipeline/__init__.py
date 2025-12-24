@@ -97,6 +97,7 @@ class DataSet:
     tag: FREQ_TAG
     ts: TimeSeries
     root: Path | None = None
+    additive_const: float = 0.0
 
     # начальные оценки из Coarse + ESPRIT
     f1_init: float = 0.0

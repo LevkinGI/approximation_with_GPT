@@ -627,21 +627,19 @@ def _single_sine_refine(t: NDArray, y: NDArray, f0: float
 
 
 @njit(fastmath=True, cache=True)
-def _numba_residuals(p, t_all, y_all, weights_all, split_idx):
+def _numba_residuals(p, t_all, y_all, weights_all, split_idx, C_lf, C_hf):
     # Распаковка параметров
-    # Порядок: k_lf, k_hf, C_lf, C_hf, A1, A2, tau1, tau2, f1, f2, phi1, phi2
+    # Порядок: k_lf, k_hf, A1, A2, tau1, tau2, f1, f2, phi1, phi2
     k_lf = p[0]
     k_hf = p[1]
-    C_lf = p[2]
-    C_hf = p[3]
-    A1   = p[4]
-    A2   = p[5]
-    tau1 = p[6]
-    tau2 = p[7]
-    f1   = p[8]
-    f2   = p[9]
-    phi1 = p[10]
-    phi2 = p[11]
+    A1   = p[2]
+    A2   = p[3]
+    tau1 = p[4]
+    tau2 = p[5]
+    f1   = p[6]
+    f2   = p[7]
+    phi1 = p[8]
+    phi2 = p[9]
 
     # Предварительные вычисления для скорости
     inv_tau1 = -1.0 / tau1
@@ -738,12 +736,9 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     k_lf_init = 1
     k_hf_init = 1
-    C_lf_init = np.mean(y_lf)
-    C_hf_init = np.mean(y_hf)
 
     p0 = np.array([
         k_lf_init, k_hf_init,
-        C_lf_init, C_hf_init,
         A1_init,    A2_init,
         tau1_init,  tau2_init,
         f1_init,    f2_init,
@@ -758,7 +753,6 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     lo = np.array([
         0.5, 0.5,
-        C_lf_init - np.std(y_lf), C_hf_init - np.std(y_hf),
         0.0, 0.0,
         tau1_lo, tau2_lo,
         f1_lo, f2_lo,
@@ -766,7 +760,6 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     ])
     hi = np.array([
         2, 2,
-        C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf),
         A1_init * 2, A2_init * 2,
         tau1_hi, tau2_hi,
         f1_hi, f2_hi,
@@ -786,7 +779,9 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     weights_all = np.concatenate((weights_lf, weights_hf))
 
     def residuals(p):
-        return _numba_residuals(p, t_all, y_all, weights_all, split_idx)
+        return _numba_residuals(
+            p, t_all, y_all, weights_all, split_idx, ds_lf.additive_const, ds_hf.additive_const
+        )
 
     sol = least_squares(
         residuals,
@@ -819,19 +814,16 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     sigma_k_lf = _sigma(0)
     sigma_k_hf = _sigma(1)
-    sigma_C_lf = _sigma(2)
-    sigma_C_hf = _sigma(3)
-    sigma_A1 = _sigma(4)
-    sigma_A2 = _sigma(5)
-    sigma_tau1 = _sigma(6)
-    sigma_tau2 = _sigma(7)
-    sigma_f1 = _sigma(8)
-    sigma_f2 = _sigma(9)
-    sigma_phi1 = _sigma(10)
-    sigma_phi2 = _sigma(11)
+    sigma_A1 = _sigma(2)
+    sigma_A2 = _sigma(3)
+    sigma_tau1 = _sigma(4)
+    sigma_tau2 = _sigma(5)
+    sigma_f1 = _sigma(6)
+    sigma_f2 = _sigma(7)
+    sigma_phi1 = _sigma(8)
+    sigma_phi2 = _sigma(9)
 
-    (k_lf, k_hf, C_lf, C_hf,
-      A1, A2, tau1, tau2,
+    (k_lf, k_hf, A1, A2, tau1, tau2,
       f1_fin, f2_fin, phi1_fin, phi2_fin) = p
     logger.debug(
         "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
@@ -848,14 +840,14 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         A2=A2,
         k_lf=k_lf,
         k_hf=k_hf,
-        C_lf=C_lf,
-        C_hf=C_hf,
+        C_lf=ds_lf.additive_const,
+        C_hf=ds_hf.additive_const,
         f1_err=sigma_f1,
         f2_err=sigma_f2,
         k_lf_err=sigma_k_lf,
         k_hf_err=sigma_k_hf,
-        C_lf_err=sigma_C_lf,
-        C_hf_err=sigma_C_hf,
+        C_lf_err=0.0,
+        C_hf_err=0.0,
         A1_err=sigma_A1,
         A2_err=sigma_A2,
         tau1_err=sigma_tau1,
@@ -1333,18 +1325,17 @@ def process_pair(
         return best_fit
 
 @njit(fastmath=True, cache=True)
-def _numba_residuals_single(p, t, y, w):
+def _numba_residuals_single(p, t, y, w, C):
     # Распаковка параметров (порядок должен совпадать с p0)
     k    = p[0]
-    C    = p[1]
-    A1   = p[2]
-    A2   = p[3]
-    tau1 = p[4]
-    tau2 = p[5]
-    f1   = p[6]
-    f2   = p[7]
-    phi1 = p[8]
-    phi2 = p[9]
+    A1   = p[1]
+    A2   = p[2]
+    tau1 = p[3]
+    tau2 = p[4]
+    f1   = p[5]
+    f2   = p[6]
+    phi1 = p[7]
+    phi2 = p[8]
 
     # Предварительные расчеты констант
     inv_tau1 = -1.0 / tau1
@@ -1407,10 +1398,8 @@ def fit_single(ds: DataSet,
     )
 
     k_init = 1.0
-    C_init = np.mean(y)
     p0 = np.array([
         k_init,
-        C_init,
         A1_init,
         A2_init,
         tau1_init,
@@ -1429,7 +1418,6 @@ def fit_single(ds: DataSet,
 
     lo = np.array([
         0.5,
-        C_init - np.std(y),
         0.0,
         0.0,
         tau1_lo,
@@ -1441,7 +1429,6 @@ def fit_single(ds: DataSet,
     ])
     hi = np.array([
         2.0,
-        C_init + np.std(y),
         A1_init * 2,
         A2_init * 2,
         tau1_hi,
@@ -1453,7 +1440,7 @@ def fit_single(ds: DataSet,
     ])
 
     def residuals(p):
-        return _numba_residuals_single(p, t, y, w)
+        return _numba_residuals_single(p, t, y, w, ds.additive_const)
 
     sol = least_squares(
         residuals,
@@ -1488,17 +1475,16 @@ def fit_single(ds: DataSet,
         return math.sqrt(val)
 
     sigma_k = _sigma(0)
-    sigma_C = _sigma(1)
-    sigma_A1 = _sigma(2)
-    sigma_A2 = _sigma(3)
-    sigma_tau1 = _sigma(4)
-    sigma_tau2 = _sigma(5)
-    sigma_f1 = _sigma(6)
-    sigma_f2 = _sigma(7)
-    sigma_phi1 = _sigma(8)
-    sigma_phi2 = _sigma(9)
+    sigma_A1 = _sigma(1)
+    sigma_A2 = _sigma(2)
+    sigma_tau1 = _sigma(3)
+    sigma_tau2 = _sigma(4)
+    sigma_f1 = _sigma(5)
+    sigma_f2 = _sigma(6)
+    sigma_phi1 = _sigma(7)
+    sigma_phi2 = _sigma(8)
 
-    (k_fin, C_fin, A1_fin, A2_fin, tau1_fin, tau2_fin,
+    (k_fin, A1_fin, A2_fin, tau1_fin, tau2_fin,
      f1_fin, f2_fin, phi1_fin, phi2_fin) = p
     logger.debug(
         "Результат LF-only: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
@@ -1521,13 +1507,13 @@ def fit_single(ds: DataSet,
             A2=A2_fin,
             k_lf=k_fin,
             k_hf=float("nan"),
-            C_lf=C_fin,
+            C_lf=ds.additive_const,
             C_hf=float("nan"),
             f1_err=sigma_f1,
             f2_err=sigma_f2,
             k_lf_err=sigma_k,
             k_hf_err=float("nan"),
-            C_lf_err=sigma_C,
+            C_lf_err=0.0,
             C_hf_err=float("nan"),
             A1_err=sigma_A1,
             A2_err=sigma_A2,
