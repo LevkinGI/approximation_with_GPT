@@ -580,9 +580,10 @@ def visualize_stacked(
     def _update_axis_range(data_dict, *, row: int, enforce_zero: bool = False, clamp_zero_if_needed: bool = False):
         vals: list[float] = []
         errs: list[float] = []
-        for _, v1, v2, e1, e2 in data_dict.values():
-            vals.extend([v1, v2])
-            errs.extend([e1, e2])
+        for entries in data_dict.values():
+            for _, v1, v2, e1, e2 in entries:
+                vals.extend([v1, v2])
+                errs.extend([e1, e2])
         rng = _calc_range(vals, errs, enforce_zero=enforce_zero, clamp_zero_if_needed=clamp_zero_if_needed)
         if rng is not None:
             fig.update_yaxes(range=rng, row=row, col=4)
