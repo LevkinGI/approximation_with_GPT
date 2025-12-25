@@ -30,7 +30,7 @@ def test_no_debug_when_freqs_within_bounds(monkeypatch, tmp_path, caplog):
     )
     monkeypatch.setattr(fit, "_peak_in_band", lambda *a, **k: None)
 
-    def fake_fit_pair(ds_lf, ds_hf, freq_bounds=None):
+    def fake_fit_pair(ds_lf, ds_hf, freq_bounds=None, *, base_is_lf=True):
         res = FittingResult(
             f1=ds_lf.f1_init,
             f2=ds_hf.f2_init,
@@ -88,7 +88,7 @@ def test_process_pair_uses_guess_flag(monkeypatch, tmp_path):
     monkeypatch.setattr(fit, "_peak_in_band", fake_peak_in_band)
     monkeypatch.setattr(fit, "_cwt_gaussian_candidates", lambda *a, **k: ([], []))
 
-    def fake_fit_pair(ds_lf, ds_hf, freq_bounds=None):
+    def fake_fit_pair(ds_lf, ds_hf, freq_bounds=None, *, base_is_lf=True):
         res = FittingResult(
             f1=ds_lf.f1_init,
             f2=ds_hf.f2_init,
@@ -121,4 +121,3 @@ def test_process_pair_uses_guess_flag(monkeypatch, tmp_path):
     hf3 = _make_ds("HF", tmp_path)
     fit.process_pair(lf3, hf3, use_theory_guess=True)
     assert guess_calls["count"] == 2
-
