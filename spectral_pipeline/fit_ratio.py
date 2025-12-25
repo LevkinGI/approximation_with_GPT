@@ -10,7 +10,7 @@ from scipy.optimize import least_squares
 
 from . import FittingResult, GHZ, PI, logger
 
-REF_FREQ_RANGE = (8 * GHZ, 12 * GHZ)
+REF_FREQ_RANGE = (7 * GHZ, 14 * GHZ)
 RATIO_MIN = 1e-6
 RATIO_MAX = 5.0
 
