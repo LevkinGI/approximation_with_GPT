@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Tuple, List, Optional
+import math
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import least_squares
