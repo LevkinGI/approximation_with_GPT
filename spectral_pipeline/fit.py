@@ -773,6 +773,8 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         PI+1e-5, PI+1e-5
     ])
 
+    p0 = np.clip(p0, lo, hi)
+
     t_all = np.concatenate((t_lf, t_hf))
     y_all = np.concatenate((y_lf, y_hf))
     split_idx = len(t_lf)
@@ -1455,6 +1457,8 @@ def fit_single(ds: DataSet,
         PI+1e-5,
         PI+1e-5,
     ])
+
+    p0 = np.clip(p0, lo, hi)
 
     def residuals(p):
         return _numba_residuals_single(p, t, y, w)
