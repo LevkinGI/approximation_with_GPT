@@ -164,22 +164,6 @@ def _prepare_ratio_problem(
     C_lf = init_fit.C_lf
     C_hf = init_fit.C_hf
 
-    p0 = np.array(
-        [
-            k_lf,
-            k_hf,
-            C_lf,
-            C_hf,
-            base_amp,
-            other_amp,
-            tau_base,
-            base_freq,
-            ratio_init,
-            base_phi,
-            other_phi,
-        ]
-    )
-
     lo_k_lf, hi_k_lf = _span_around(k_lf, bounds_margin)
     lo_k_hf, hi_k_hf = _span_around(k_hf, bounds_margin)
     lo_C_lf, hi_C_lf = _span_around(C_lf, bounds_margin)
@@ -239,6 +223,23 @@ def _prepare_ratio_problem(
             PI + 1e-5,
         ]
     )
+
+    p0 = np.array(
+        [
+            k_lf,
+            k_hf,
+            C_lf,
+            C_hf,
+            base_amp,
+            other_amp,
+            tau_base,
+            base_freq,
+            ratio_init,
+            base_phi,
+            other_phi,
+        ]
+    )
+    p0 = np.clip(p0, lo, hi)
 
     w_lf_raw = _piecewise_time_weights(t_lf)
     n_lf = y_lf.size
