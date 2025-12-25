@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover - handled at runtime
     pywt = None  # type: ignore[assignment]
 
 from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
+from .fit_ratio import refine_ratio_candidates
 
 
 def _resolve_tau_bounds(
@@ -224,11 +225,9 @@ def _cwt_gaussian_candidates(
 # Maximum acceptable fitting cost. Pairs with higher cost are rejected
 # and treated as unsuccessful.
 MAX_COST = 100
-
-# Дополнительные ограничения для новой параметризации
-REF_FREQ_RANGE = (8 * GHZ, 12 * GHZ)
-RATIO_MIN = 1e-6
-RATIO_MAX = 5.0
+USE_RATIO_REFINEMENT = True
+RATIO_BOUNDS_MARGIN = 0.15
+RATIO_KEEP_MARGIN = 0.15
 
 
 def _load_guess(directory: Path, field_mT: int, temp_K: int) -> tuple[float, float] | None:
@@ -530,14 +529,6 @@ def _top2_nearest(freqs: NDArray, zetas: NDArray, f0: float
     return [(float(freqs[i]), float(zetas[i])) for i in idx]
 
 
-def _filter_nonpositive_candidates(
-    candidates: list[tuple[float, Optional[float]]],
-) -> list[tuple[float, Optional[float]]]:
-    """Remove zero or negative frequency candidates."""
-
-    return [(f, z) for f, z in candidates if f > 0]
-
-
 def _hankel_matrix(x: NDArray, L: int) -> NDArray:
     N = len(x)
     if L <= 0 or L >= N:
@@ -695,67 +686,8 @@ def _numba_residuals(p, t_all, y_all, weights_all, split_idx):
     return residuals
 
 
-@njit(fastmath=True, cache=True)
-def _numba_residuals_ratio(p, t_all, y_all, weights_all, split_idx, base_is_lf):
-    # Параметры: k_lf, k_hf, C_lf, C_hf, A_base, A_other,
-    # tau_base, f_base, ratio, phi_base, phi_other
-    k_lf = p[0]
-    k_hf = p[1]
-    C_lf = p[2]
-    C_hf = p[3]
-    A_base = p[4]
-    A_other = p[5]
-    tau_base = p[6]
-    f_base = p[7]
-    ratio = p[8]
-    phi_base = p[9]
-    phi_other = p[10]
-
-    ratio_safe = ratio if ratio > 0 else RATIO_MIN
-    f_other = f_base * ratio_safe
-    tau_other = tau_base / ratio_safe
-
-    if base_is_lf:
-        A1, A2 = A_base, A_other
-        tau1, tau2 = tau_base, tau_other
-        f1, f2 = f_base, f_other
-        phi1, phi2 = phi_base, phi_other
-    else:
-        A1, A2 = A_other, A_base
-        tau1, tau2 = tau_other, tau_base
-        f1, f2 = f_other, f_base
-        phi1, phi2 = phi_other, phi_base
-
-    inv_tau1 = -1.0 / tau1
-    inv_tau2 = -1.0 / tau2
-    omega1 = 2.0 * np.pi * f1
-    omega2 = 2.0 * np.pi * f2
-
-    residuals = np.empty_like(y_all)
-
-    for i in range(split_idx):
-        t = t_all[i]
-        signal = (
-            A1 * np.exp(t * inv_tau1) * np.cos(omega1 * t + phi1)
-            + A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2)
-        )
-        residuals[i] = (k_lf * signal + C_lf - y_all[i]) * weights_all[i]
-
-    for i in range(split_idx, len(t_all)):
-        t = t_all[i]
-        signal = (
-            A1 * np.exp(t * inv_tau1) * np.cos(omega1 * t + phi1)
-            + A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2)
-        )
-        residuals[i] = (k_hf * signal + C_hf - y_all[i]) * weights_all[i]
-
-    return residuals
-
-
 def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
-             freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None,
-             *,
-             base_is_lf: bool):
+             freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
@@ -777,11 +709,10 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     f1_init = ds_lf.f1_init
     f2_init = ds_hf.f2_init
     logger.debug(
-        "Начальные оценки: f1=%.3f ГГц, f2=%.3f ГГц, base_is_lf=%s",
-        f1_init/GHZ, f2_init/GHZ, base_is_lf)
+        "Начальные оценки: f1=%.3f ГГц, f2=%.3f ГГц", f1_init/GHZ, f2_init/GHZ)
 
     _, phi1_init, A1_init, tau1_init = _single_sine_refine(t_lf, y_lf, f1_init)
-    tau1_init, _, _ = _resolve_tau_bounds(
+    tau1_init, tau1_lo, tau1_hi = _resolve_tau_bounds(
         ds_lf.zeta1, tau1_init, 5e-11, 5e-9
     )
 
@@ -802,13 +733,10 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
             hf_scale = 1.0
         proto_lf_hf = proto_lf_hf * hf_scale
 
-    if base_is_lf:
-        A1_init *= hf_scale
-    else:
-        A2_init *= hf_scale
+    A1_init *= hf_scale
 
     _, phi2_init, A2_init, tau2_init = _single_sine_refine(t_hf, y_hf - proto_lf_hf, f2_init)
-    tau2_init, _, _ = _resolve_tau_bounds(
+    tau2_init, tau2_lo, tau2_hi = _resolve_tau_bounds(
         ds_hf.zeta2, tau2_init, 5e-12, 5e-10
     )
 
@@ -817,70 +745,37 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     C_lf_init = np.mean(y_lf)
     C_hf_init = np.mean(y_hf)
 
-    base_freq_init = f1_init if base_is_lf else f2_init
-    other_freq_init = f2_init if base_is_lf else f1_init
-
-    base_amp_init = A1_init if base_is_lf else A2_init
-    other_amp_init = A2_init if base_is_lf else A1_init
-    base_phi_init = phi1_init if base_is_lf else phi2_init
-    other_phi_init = phi2_init if base_is_lf else phi1_init
-    base_tau_init_raw = tau1_init if base_is_lf else tau2_init
-    base_zeta = ds_lf.zeta1 if base_is_lf else ds_hf.zeta2
-    base_tau_init, tau_base_lo, tau_base_hi = _resolve_tau_bounds(
-        base_zeta, base_tau_init_raw, 1e-11, 1e-9
-    )
-
-    ratio_lo, ratio_hi = RATIO_MIN, RATIO_MAX
-    base_lo, base_hi = REF_FREQ_RANGE
-    if freq_bounds is not None:
-        (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
-        if base_is_lf:
-            base_lo = max(base_lo, f1_lo)
-            base_hi = min(base_hi, f1_hi)
-            ratio_lo = max(ratio_lo, f2_lo / max(base_hi, 1e-12))
-            ratio_hi = min(ratio_hi, f2_hi / max(base_lo, 1e-12))
-        else:
-            base_lo = max(base_lo, f2_lo)
-            base_hi = min(base_hi, f2_hi)
-            ratio_lo = max(ratio_lo, f1_lo / max(base_hi, 1e-12))
-            ratio_hi = min(ratio_hi, f1_hi / max(base_lo, 1e-12))
-        if base_hi <= base_lo:
-            base_lo, base_hi = REF_FREQ_RANGE
-        if ratio_hi <= ratio_lo:
-            ratio_hi = RATIO_MAX
-            ratio_lo = RATIO_MIN
-    ratio_init = 1.0
-
     p0 = np.array([
         k_lf_init, k_hf_init,
         C_lf_init, C_hf_init,
-        base_amp_init, other_amp_init,
-        base_tau_init,
-        base_freq_init,
-        ratio_init,
-        base_phi_init, other_phi_init,
+        A1_init,    A2_init,
+        tau1_init,  tau2_init,
+        f1_init,    f2_init,
+        phi1_init,  phi2_init
     ])
+
+    if freq_bounds is None:
+        f1_lo, f1_hi = f1_init * 0.9, f1_init * 1.2
+        f2_lo, f2_hi = f2_init * 0.9, f2_init * 1.2
+    else:
+        (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
 
     lo = np.array([
         0.5, 0.5,
         C_lf_init - np.std(y_lf), C_hf_init - np.std(y_hf),
         0.0, 0.0,
-        tau_base_lo,
-        base_lo,
-        ratio_lo,
+        tau1_lo, tau2_lo,
+        f1_lo, f2_lo,
         -PI-1e-5, -PI-1e-5
     ])
     hi = np.array([
         2, 2,
         C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf),
-        base_amp_init * 2, other_amp_init * 2,
-        tau_base_hi,
-        base_hi,
-        ratio_hi,
+        A1_init * 2, A2_init * 2,
+        tau1_hi, tau2_hi,
+        f1_hi, f2_hi,
         PI+1e-5, PI+1e-5
     ])
-
-    p0 = np.clip(p0, lo, hi)
 
     t_all = np.concatenate((t_lf, t_hf))
     y_all = np.concatenate((y_lf, y_hf))
@@ -895,14 +790,14 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     weights_all = np.concatenate((weights_lf, weights_hf))
 
     def residuals(p):
-        return _numba_residuals_ratio(p, t_all, y_all, weights_all, split_idx, base_is_lf)
+        return _numba_residuals(p, t_all, y_all, weights_all, split_idx)
 
     sol = least_squares(
         residuals,
         p0,
         bounds=(lo, hi),
         method='trf',
-        ftol=3e-16, xtol=3e-16, gtol=3e-16,
+        ftol=1e-15, xtol=1e-15, gtol=1e-15,
         max_nfev=10000,
         loss='soft_l1',
         f_scale=0.1,
@@ -930,71 +825,18 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     sigma_k_hf = _sigma(1)
     sigma_C_lf = _sigma(2)
     sigma_C_hf = _sigma(3)
-    sigma_A_base = _sigma(4)
-    sigma_A_other = _sigma(5)
-    sigma_tau_base = _sigma(6)
-    sigma_f_base = _sigma(7)
-    sigma_ratio = _sigma(8)
-    sigma_phi_base = _sigma(9)
-    sigma_phi_other = _sigma(10)
+    sigma_A1 = _sigma(4)
+    sigma_A2 = _sigma(5)
+    sigma_tau1 = _sigma(6)
+    sigma_tau2 = _sigma(7)
+    sigma_f1 = _sigma(8)
+    sigma_f2 = _sigma(9)
+    sigma_phi1 = _sigma(10)
+    sigma_phi2 = _sigma(11)
 
-    k_lf, k_hf, C_lf, C_hf = p[0], p[1], p[2], p[3]
-    A_base, A_other = p[4], p[5]
-    tau_base, f_base, ratio = p[6], p[7], p[8]
-    phi_base, phi_other = p[9], p[10]
-
-    ratio_safe = ratio if ratio > 0 else RATIO_MIN
-    f_other = f_base * ratio_safe
-    tau_other = tau_base / ratio_safe
-
-    if base_is_lf:
-        A1, A2 = A_base, A_other
-        tau1, tau2 = tau_base, tau_other
-        f1_fin, f2_fin = f_base, f_other
-        phi1_fin, phi2_fin = phi_base, phi_other
-        sigma_A1, sigma_A2 = sigma_A_base, sigma_A_other
-        sigma_phi1, sigma_phi2 = sigma_phi_base, sigma_phi_other
-    else:
-        A1, A2 = A_other, A_base
-        tau1, tau2 = tau_other, tau_base
-        f1_fin, f2_fin = f_other, f_base
-        phi1_fin, phi2_fin = phi_other, phi_base
-        sigma_A1, sigma_A2 = sigma_A_other, sigma_A_base
-        sigma_phi1, sigma_phi2 = sigma_phi_other, sigma_phi_base
-
-    cov_ratio_base = float(cov[7, 8]) if cov.shape[0] > 8 else float("nan")
-    cov_tau_ratio = float(cov[6, 8]) if cov.shape[0] > 8 else float("nan")
-
-    sigma_f_other = float("nan")
-    sigma_tau_other = float("nan")
-    if np.isfinite(sigma_f_base) and np.isfinite(sigma_ratio):
-        sigma_f_other_sq = (
-            (ratio_safe ** 2) * (sigma_f_base ** 2)
-            + (f_base ** 2) * (sigma_ratio ** 2)
-            + 2 * ratio_safe * f_base * cov_ratio_base
-        )
-        if sigma_f_other_sq >= 0:
-            sigma_f_other = math.sqrt(sigma_f_other_sq)
-    if np.isfinite(sigma_tau_base) and np.isfinite(sigma_ratio):
-        d_tau_base = 1.0 / ratio_safe
-        d_ratio = -tau_base / (ratio_safe ** 2)
-        sigma_tau_other_sq = (
-            (d_tau_base ** 2) * (sigma_tau_base ** 2)
-            + (d_ratio ** 2) * (sigma_ratio ** 2)
-            + 2 * d_tau_base * d_ratio * cov_tau_ratio
-        )
-        if sigma_tau_other_sq >= 0:
-            sigma_tau_other = math.sqrt(sigma_tau_other_sq)
-
-    sigma_k_lf = _sigma(0)
-    sigma_k_hf = _sigma(1)
-    sigma_C_lf = _sigma(2)
-    sigma_C_hf = _sigma(3)
-    sigma_f1 = sigma_f_base if base_is_lf else sigma_f_other
-    sigma_f2 = sigma_f_other if base_is_lf else sigma_f_base
-    sigma_tau1 = sigma_tau_base if base_is_lf else sigma_tau_other
-    sigma_tau2 = sigma_tau_other if base_is_lf else sigma_tau_base
-
+    (k_lf, k_hf, C_lf, C_hf,
+      A1, A2, tau1, tau2,
+      f1_fin, f2_fin, phi1_fin, phi2_fin) = p
     logger.debug(
         "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
         f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
@@ -1360,82 +1202,101 @@ def process_pair(
         if HF_BAND[0] <= freq_hz <= HF_BAND[1]:
             _append_unique(hf_cand, freq_hz, label="HF", source="CWT")
 
-    lf_cand = _filter_nonpositive_candidates(lf_cand)
-    hf_cand = _filter_nonpositive_candidates(hf_cand)
-
     logger.info("LF candidates: %s", [(round(f/GHZ,3), z) for f, z in lf_cand])
     logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f, z in hf_cand])
 
-    seen: set[tuple[float, float, bool]] = set()
+    seen: set[tuple[float, float]] = set()
+    successful: list[tuple[FittingResult, float]] = []
     best_cost = np.inf
-    best_fit = None
-
-    def _try_fit_candidate(f1: float, z1: Optional[float], f2: float, z2: Optional[float], base_flag: bool):
-        nonlocal best_cost, best_fit
-        key = (f1, f2, base_flag)
-        if key in seen:
-            return
-        if freq_bounds is not None:
-            (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
-            if not (f1_lo <= f1 <= f1_hi and f2_lo <= f2 <= f2_hi):
-                logger.debug(
-                    "Комбинация вне freq_bounds: f1=%.3f ГГц, f2=%.3f ГГц",
-                    f1 / GHZ,
-                    f2 / GHZ,
-                )
-                seen.add(key)
-                return
-        ds_lf.f1_init, ds_lf.zeta1 = f1, z1
-        ds_hf.f2_init, ds_hf.zeta2 = f2, z2
-        try:
-            fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds, base_is_lf=base_flag)
-        except Exception as exc:
-            logger.debug(
-                "Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц (base_is_lf=%s): %s",
-                f1 / GHZ,
-                f2 / GHZ,
-                base_flag,
-                exc,
-            )
-        else:
-            if cost < best_cost:
-                best_cost = cost
-                best_fit = fit
-        finally:
-            seen.add(key)
-
-    def _enumerate_bases(f1: float, f2: float) -> list[bool]:
-        bases: list[bool] = []
-        if REF_FREQ_RANGE[0] <= f1 <= REF_FREQ_RANGE[1]:
-            bases.append(True)
-        if REF_FREQ_RANGE[0] <= f2 <= REF_FREQ_RANGE[1]:
-            bases.append(False)
-        return bases
-
+    best_fit: Optional[FittingResult] = None
     for f1, z1 in lf_cand:
         for f2, z2 in hf_cand:
-            base_options = _enumerate_bases(f1, f2)
-            if not base_options:
+            if (f1, f2) in seen:
                 continue
-            for base_flag in base_options:
-                _try_fit_candidate(f1, z1, f2, z2, base_flag)
+            if freq_bounds is not None:
+                (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
+                if not (f1_lo <= f1 <= f1_hi and f2_lo <= f2 <= f2_hi):
+                    logger.debug(
+                        "Комбинация вне freq_bounds: f1=%.3f ГГц, f2=%.3f ГГц",
+                        f1 / GHZ,
+                        f2 / GHZ,
+                    )
+                    seen.add((f1, f2))
+                    continue
+            ds_lf.f1_init, ds_lf.zeta1 = f1, z1
+            ds_hf.f2_init, ds_hf.zeta2 = f2, z2
+            try:
+                fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
+            except Exception as exc:
+                logger.debug(
+                    "Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s",
+                    f1 / GHZ,
+                    f2 / GHZ,
+                    exc,
+                )
+            else:
+                successful.append((fit, cost))
+                if cost < best_cost:
+                    best_cost = cost
+                    best_fit = fit
+            finally:
+                seen.add((f1, f2))
     if best_fit is None and guess is not None:
         logger.warning("(%d, %d): не удалось аппроксимировать с первым приближением, поиск альтернативы", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
-        lf_cand = _filter_nonpositive_candidates(lf_cand)
-        hf_cand = _filter_nonpositive_candidates(hf_cand)
         best_cost = np.inf
         for f1, z1 in lf_cand:
             for f2, z2 in hf_cand:
-                base_options = _enumerate_bases(f1, f2)
-                if not base_options:
+                if (f1, f2) in seen:
                     continue
-                for base_flag in base_options:
-                    _try_fit_candidate(f1, z1, f2, z2, base_flag)
+                if freq_bounds is not None:
+                    (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
+                    if not (f1_lo <= f1 <= f1_hi and f2_lo <= f2 <= f2_hi):
+                        logger.debug(
+                            "Комбинация вне freq_bounds: f1=%.3f ГГц, f2=%.3f ГГц",
+                            f1 / GHZ,
+                            f2 / GHZ,
+                        )
+                        seen.add((f1, f2))
+                        continue
+                ds_lf.f1_init, ds_lf.zeta1 = f1, z1
+                ds_hf.f2_init, ds_hf.zeta2 = f2, z2
+                try:
+                    fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
+                except Exception as exc:
+                    logger.debug(
+                        "Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s",
+                        f1 / GHZ,
+                        f2 / GHZ,
+                        exc,
+                    )
+                else:
+                    successful.append((fit, cost))
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_fit = fit
+                finally:
+                    seen.add((f1, f2))
 
-    if best_fit is None:
+    if not successful:
         logger.error("(%d, %d): ни одна комбинация не аппроксимировалась", ds_lf.temp_K, ds_lf.field_mT)
         raise RuntimeError("Ни одна комбинация не аппроксимировалась")
+
+    if USE_RATIO_REFINEMENT:
+        ratio_results = refine_ratio_candidates(
+            ds_lf,
+            ds_hf,
+            successful,
+            freq_bounds=freq_bounds,
+            bounds_margin=RATIO_BOUNDS_MARGIN,
+            keep_margin=RATIO_KEEP_MARGIN,
+            enabled=True,
+        )
+        if ratio_results:
+            successful.extend(ratio_results)
+
+    best_fit, best_cost = min(successful, key=lambda item: item[1])
+
     if best_fit.f1 > best_fit.f2:
         logger.info(
             "(%d, %d): f1=%.3f ГГц > f2=%.3f ГГц, перестановка",
@@ -1471,6 +1332,7 @@ def process_pair(
             phi2_err=best_fit.phi1_err,
             cost=best_fit.cost,
         )
+    best_fit.cost = best_cost
     if best_fit.cost is not None and best_fit.cost > MAX_COST:
         logger.warning(
             "(%d, %d): аппроксимация отклонена f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
@@ -1618,8 +1480,6 @@ def fit_single(ds: DataSet,
         PI+1e-5,
     ])
 
-    p0 = np.clip(p0, lo, hi)
-
     def residuals(p):
         return _numba_residuals_single(p, t, y, w)
 
@@ -1628,9 +1488,9 @@ def fit_single(ds: DataSet,
         p0,
         bounds=(lo, hi),
         method="trf",
-        ftol=3e-16,
-        xtol=3e-16,
-        gtol=3e-16,
+        ftol=1e-15,
+        xtol=1e-15,
+        gtol=1e-15,
         max_nfev=10000,
         loss="soft_l1",
         f_scale=0.1,
