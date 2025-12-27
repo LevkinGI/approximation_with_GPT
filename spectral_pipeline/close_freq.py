@@ -17,7 +17,6 @@ class CloseFreqCandidate:
     f1, f2   – частоты (Гц)
     sigma1/2 – оценка ширины гауссиан (Гц)
     amp1/2   – амплитуды гауссиан
-    offset   – постоянная составляющая
     """
 
     f1: float
@@ -26,7 +25,6 @@ class CloseFreqCandidate:
     sigma2: float
     amp1: float
     amp2: float
-    offset: float
 
     def tau_estimates(self) -> tuple[float | None, float | None]:
         return tuple(_tau_from_sigma(s) for s in (self.sigma1, self.sigma2))  # type: ignore[return-value]
@@ -43,13 +41,12 @@ class CloseFreqCandidate:
         m2 = self.f2 / GHZ
         s1 = self.sigma1 / GHZ
         s2 = self.sigma2 / GHZ
-        return _double_gaussian(freqs_GHz, self.amp1, m1, s1, self.amp2, m2, s2, self.offset)
+        return _double_gaussian(freqs_GHz, self.amp1, m1, s1, self.amp2, m2, s2)
 
 
-def _double_gaussian(freqs_GHz: NDArray, a1, m1, s1, a2, m2, s2, c):
+def _double_gaussian(freqs_GHz: NDArray, a1, m1, s1, a2, m2, s2):
     return (
-        c
-        + a1 * np.exp(-0.5 * ((freqs_GHz - m1) / s1) ** 2)
+        a1 * np.exp(-0.5 * ((freqs_GHz - m1) / s1) ** 2)
         + a2 * np.exp(-0.5 * ((freqs_GHz - m2) / s2) ** 2)
     )
 
@@ -72,7 +69,7 @@ def find_close_frequency_candidate(
     freqs: NDArray,
     amps: NDArray,
     *,
-    window_GHz: float = 5.0,
+    window_GHz: float = 6.0,
     min_points: int = 8,
 ) -> CloseFreqCandidate | None:
     if freqs.size == 0 or amps.size == 0:
@@ -95,7 +92,6 @@ def find_close_frequency_candidate(
         return None
 
     f_win_GHz = f_win / GHZ
-    offset0 = float(np.percentile(a_win, 10))
     peaks = list(_top_peaks(f_win, a_win))
     if len(peaks) == 0:
         return None
@@ -109,9 +105,9 @@ def find_close_frequency_candidate(
     m1_GHz = m1 / GHZ
     m2_GHz = m2 / GHZ
     sigma0 = max(0.2, window_GHz / 6)
-    p0 = [a1, m1_GHz, sigma0, a2, m2_GHz, sigma0, offset0]
-    lower = [0.0, m1_GHz - window_GHz, 1e-3, 0.0, m2_GHz - window_GHz, 1e-3, -np.inf]
-    upper = [np.inf, m1_GHz + window_GHz, window_GHz, np.inf, m2_GHz + window_GHz, window_GHz, np.inf]
+    p0 = [a1, m1_GHz, sigma0, a2, m2_GHz, sigma0]
+    lower = [0.0, m1_GHz - window_GHz, 1e-3, 0.0, m2_GHz - window_GHz, 1e-3]
+    upper = [np.inf, m1_GHz + window_GHz, window_GHz, np.inf, m2_GHz + window_GHz, window_GHz]
 
     try:
         popt, _ = curve_fit(
@@ -126,7 +122,7 @@ def find_close_frequency_candidate(
         logger.debug("Не удалось аппроксимировать двойной пик: %s", exc)
         return None
 
-    a1_fit, m1_fit, s1_fit, a2_fit, m2_fit, s2_fit, offset_fit = popt
+    a1_fit, m1_fit, s1_fit, a2_fit, m2_fit, s2_fit = popt
     if a1_fit < a2_fit:
         m1_fit, m2_fit = m2_fit, m1_fit
         s1_fit, s2_fit = s2_fit, s1_fit
@@ -152,7 +148,6 @@ def find_close_frequency_candidate(
         sigma2=sigma2,
         amp1=float(a1_fit),
         amp2=float(a2_fit),
-        offset=float(offset_fit),
     )
 
 
