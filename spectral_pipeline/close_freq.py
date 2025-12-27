@@ -15,8 +15,8 @@ class CloseFreqCandidate:
     """Две близкие частоты, найденные в спектре LF.
 
     f1, f2   – частоты (Гц)
-    sigma1/2 – оценка ширины гауссиан (Гц)
-    amp1/2   – амплитуды гауссиан
+    sigma1/2 – полуширина лоренцианов (Гц)
+    amp1/2   – амплитуды лоренцианов
     """
 
     f1: float
@@ -41,13 +41,13 @@ class CloseFreqCandidate:
         m2 = self.f2 / GHZ
         s1 = self.sigma1 / GHZ
         s2 = self.sigma2 / GHZ
-        return _double_gaussian(freqs_GHz, self.amp1, m1, s1, self.amp2, m2, s2)
+        return _double_lorentz(freqs_GHz, self.amp1, m1, s1, self.amp2, m2, s2)
 
 
-def _double_gaussian(freqs_GHz: NDArray, a1, m1, s1, a2, m2, s2):
+def _double_lorentz(freqs_GHz: NDArray, a1, m1, s1, a2, m2, s2):
     return (
-        a1 * np.exp(-0.5 * ((freqs_GHz - m1) / s1) ** 2)
-        + a2 * np.exp(-0.5 * ((freqs_GHz - m2) / s2) ** 2)
+        a1 * (s1**2) / ((freqs_GHz - m1) ** 2 + s1**2)
+        + a2 * (s2**2) / ((freqs_GHz - m2) ** 2 + s2**2)
     )
 
 
@@ -111,7 +111,7 @@ def find_close_frequency_candidate(
 
     try:
         popt, _ = curve_fit(
-            _double_gaussian,
+            _double_lorentz,
             f_win_GHz,
             a_win,
             p0=p0,
