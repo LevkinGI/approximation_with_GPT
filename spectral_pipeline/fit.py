@@ -8,6 +8,7 @@ from scipy.optimize import least_squares
 
 from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
 from . import esprit_utils as _esprit_module
+from .close_freq import find_close_frequency_candidate
 from .cwt_candidates import _cwt_gaussian_candidates, _top2_nearest
 from .esprit_utils import multichannel_esprit, _esprit_freqs_and_decay
 from .spectrum_analysis import (
@@ -461,9 +462,39 @@ def process_pair(
         lf_cand, hf_cand, freq_bounds = _search_candidates()
     fs_hf = 1.0 / float(np.mean(np.diff(t_hf)))
     fs_lf = 1.0 / float(np.mean(np.diff(t_lf)))
+    best_cost = np.inf
+    best_fit = None
     freqs_fft, amps_fft = _fft_spectrum(y_hf, fs_hf)
     ds_hf.freq_fft, ds_hf.asd_fft = freqs_fft, amps_fft
     ds_lf.freq_fft, ds_lf.asd_fft = _fft_spectrum(y_lf, fs_lf)
+
+    close_cand = find_close_frequency_candidate(ds_lf.freq_fft, ds_lf.asd_fft)
+    if close_cand is not None:
+        tau1, tau2 = close_cand.tau_estimates()
+        ds_lf.f1_init = close_cand.f1
+        ds_hf.f2_init = close_cand.f2
+        ds_lf.zeta1 = 1.0 / tau1 if tau1 else None
+        ds_hf.zeta2 = 1.0 / tau2 if tau2 else None
+        freq_bounds_close = close_cand.freq_bounds(margin=0.01)
+        try:
+            fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds_close)
+        except Exception as exc:
+            logger.debug(
+                "Неудачная попытка двойного пика f1=%.3f ГГц, f2=%.3f ГГц: %s",
+                close_cand.f1 / GHZ,
+                close_cand.f2 / GHZ,
+                exc,
+            )
+        else:
+            if cost < best_cost:
+                best_cost = cost
+                best_fit = fit
+                logger.info(
+                    "Принят результат двойного пика: cost=%.3e, f1=%.3f ГГц, f2=%.3f ГГц",
+                    cost,
+                    fit.f1 / GHZ,
+                    fit.f2 / GHZ,
+                )
     pk = int(np.argmax(amps_fft))
     minima = np.where(
         (np.diff(np.signbit(np.diff(amps_fft))) > 0) & (np.arange(len(amps_fft))[1:-1] > pk)
@@ -554,8 +585,6 @@ def process_pair(
     logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f, z in hf_cand])
 
     seen: set[tuple[float, float]] = set()
-    best_cost = np.inf
-    best_fit = None
     for f1, z1 in lf_cand:
         for f2, z2 in hf_cand:
             if (f1, f2) in seen:

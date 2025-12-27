@@ -9,6 +9,7 @@ from plotly.subplots import make_subplots
 
 from . import DataSet, GHZ, NS, logger
 from .fit import _core_signal
+from .close_freq import find_close_frequency_candidate
 
 
 
@@ -67,6 +68,7 @@ def visualize_stacked(
     RAW_CLR = "#1fbe63"
     FIT_LF = "red"
     FIT_HF = "blue"
+    APPROX_CLR = "#8a2be2"
     BASE_CLR = "#606060"
 
     all_H = {ds_lf.field_mT for ds_lf, _ in triples}
@@ -658,8 +660,9 @@ def visualize_stacked(
                     col=col_idx,
                 )
 
-    spectra_HF: list[tuple[np.ndarray, np.ndarray, str]] = []
-    spectra_LF: list[tuple[np.ndarray, np.ndarray, str]] = []
+    spectra_all: list[
+        tuple[str, np.ndarray, np.ndarray, np.ndarray, np.ndarray, DataSet]
+    ] = []
     offset = 0.0
     shift_f = 1.0
 
@@ -667,38 +670,36 @@ def visualize_stacked(
         if ds_hf.freq_fft is None or ds_lf.freq_fft is None:
             continue
         depth_val = ds_hf.temp_K if varying == "T" else ds_hf.field_mT
-        spectra_HF.append(
+        lbl = f"{depth_val:.0f} {var_label}"
+        spectra_all.append(
             (
+                lbl,
                 ds_hf.freq_fft / GHZ,
                 ds_hf.asd_fft / np.max(ds_hf.asd_fft),
-                f"{depth_val:.0f} {var_label}",
-            )
-        )
-        spectra_LF.append(
-            (
                 ds_lf.freq_fft / GHZ,
                 ds_lf.asd_fft / np.max(ds_lf.asd_fft),
-                f"{depth_val:.0f} {var_label}",
+                ds_lf,
             )
         )
 
-    if spectra_HF:
-        # spectra_HF.sort(key=lambda tpl: tpl[2])
-        # spectra_LF.sort(key=lambda tpl: tpl[2])
-        shift_hf = 1.2 * max(np.nanmax(a_hf) for (_, a_hf, _) in spectra_HF)
-        shift_lf = 1.2 * max(np.nanmax(a_lf) for (_, a_lf, _) in spectra_LF)
+    if spectra_all:
+        shift_hf = 1.2 * max(np.nanmax(a_hf) for (_, _, a_hf, _, _, _) in spectra_all)
+        shift_lf = 1.2 * max(np.nanmax(a_lf) for (_, _, _, _, a_lf, _) in spectra_all)
         shift_f = max(shift_hf, shift_lf)
 
-        for idx, ((f_GHz, amp, lbl), (f_lf, amp_lf, _)) in enumerate(
-            zip(spectra_HF, spectra_LF)
+        for idx, (lbl, f_hf_GHz, amp_hf, f_lf_GHz, amp_lf, ds_lf) in enumerate(
+            spectra_all
         ):
             offset = (idx + 1) * shift_f
-            y_vals = amp + offset
-            f_GHz = f_GHz[: np.argmin(np.abs(f_GHz - 80))]
+            mask_hf = f_hf_GHz <= 80
+            mask_lf = f_lf_GHz <= 80
+
+            f_hf_plot = f_hf_GHz[mask_hf] if np.any(mask_hf) else f_hf_GHz
+            y_vals = amp_hf[mask_hf] + offset if np.any(mask_hf) else amp_hf + offset
 
             fig.add_trace(
                 go.Scattergl(
-                    x=f_GHz,
+                    x=f_hf_plot,
                     y=y_vals,
                     mode="lines",
                     line=dict(color=FIT_HF, width=2),
@@ -709,12 +710,12 @@ def visualize_stacked(
                 col=3,
             )
 
-            y_vals = amp_lf + offset
-            f_lf = f_lf[: np.argmin(np.abs(f_lf - 80))]
+            f_lf_plot = f_lf_GHz[mask_lf] if np.any(mask_lf) else f_lf_GHz
+            y_vals = amp_lf[mask_lf] + offset if np.any(mask_lf) else amp_lf + offset
 
             fig.add_trace(
                 go.Scattergl(
-                    x=f_lf,
+                    x=f_lf_plot,
                     y=y_vals,
                     mode="lines",
                     line=dict(color=FIT_LF, width=2),
@@ -725,8 +726,29 @@ def visualize_stacked(
                 col=3,
             )
 
+            close_cand = find_close_frequency_candidate(ds_lf.freq_fft, ds_lf.asd_fft)
+            if close_cand is not None:
+                approx = close_cand.evaluate(ds_lf.freq_fft)
+                mask_fit = (ds_lf.freq_fft / GHZ) <= 80
+                approx = approx[mask_fit]
+                f_fit = (ds_lf.freq_fft[mask_fit] / GHZ)
+                if approx.size and np.nanmax(approx) > 0:
+                    approx_norm = approx / np.nanmax(approx) + offset
+                    fig.add_trace(
+                        go.Scattergl(
+                            x=f_fit,
+                            y=approx_norm,
+                            mode="lines",
+                            line=dict(color=APPROX_CLR, width=2, dash="dash"),
+                            name=f"{lbl} (двойной пик)",
+                            showlegend=False,
+                        ),
+                        row=1,
+                        col=3,
+                    )
+
             fig.add_annotation(
-                x=f_GHz[-1],
+                x=f_hf_plot[-1] if f_hf_plot.size else 0,
                 y=offset,
                 text=lbl,
                 xanchor="left",
@@ -738,7 +760,7 @@ def visualize_stacked(
 
             fig.add_trace(
                 go.Scattergl(
-                    x=[f_GHz[0], f_GHz[-1]],
+                    x=[f_hf_plot[0] if f_hf_plot.size else 0, f_hf_plot[-1] if f_hf_plot.size else 0],
                     y=[offset, offset],
                     line=dict(width=1, color=BASE_CLR),
                     mode="lines",
