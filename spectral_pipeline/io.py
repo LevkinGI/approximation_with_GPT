@@ -88,16 +88,16 @@ def load_records(root: Path) -> List[DataSet]:
         s = s[st:]
 
         # Для LF дополнительно ограничиваем длительность 0.7 нс
-        # if tag == "LF":
-        #     cutoff = 0.3e-9
-        #     end = np.searchsorted(t, cutoff, "right")
-        #     t, s = t[:end], s[:end]
+        if tag == "LF":
+            cutoff = 0.7e-9
+            end = np.searchsorted(t, cutoff, "right")
+            t, s = t[:end], s[:end]
 
         # Для HF дополнительно ограничиваем длительность 0.08 нс
-        # if tag == "HF":
-        #     cutoff = 0.11e-9
-        #     end = np.searchsorted(t, cutoff, "right")
-        #     t, s = t[:end], s[:end]
+        if tag == "HF":
+            cutoff = 0.1e-9
+            end = np.searchsorted(t, cutoff, "right")
+            t, s = t[:end], s[:end]
 
         if len(t) < 10:
             logger.warning("Пропуск %s: слишком короткий ряд", path.name)
