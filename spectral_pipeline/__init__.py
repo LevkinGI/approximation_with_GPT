@@ -36,8 +36,8 @@ C_M_S = 3e11
 
 # диапазоны частот для НЧ и ВЧ сигналов
 # поиск осуществляется в общем диапазоне 0–40 ГГц
-LF_BAND = (0.1 * GHZ, 50 * GHZ)
-HF_BAND = (0.1 * GHZ, 50 * GHZ)
+LF_BAND = (0.1, 50 * GHZ)
+HF_BAND = (0.1, 50 * GHZ)
 FREQ_TAG = Literal["LF", "HF"]
 
 @dataclass(slots=True)
