@@ -89,7 +89,7 @@ def load_records(root: Path) -> List[DataSet]:
 
         # Для LF дополнительно ограничиваем длительность 0.7 нс
         if tag == "LF":
-            cutoff = 0.4e-9
+            cutoff = 0.3e-9
             end = np.searchsorted(t, cutoff, "right")
             t, s = t[:end], s[:end]
 
