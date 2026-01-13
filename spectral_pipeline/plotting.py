@@ -9,6 +9,12 @@ from plotly.subplots import make_subplots
 
 from . import DataSet, GHZ, NS, logger
 from .fit import _core_signal
+from .phase_diagram import (
+    PHASE_WEIGHT,
+    compute_phases,
+    fit_phase_coeffs,
+    load_experimental_phase_diagram,
+)
 
 
 
@@ -171,15 +177,32 @@ def visualize_stacked(
         )
     theory_label_suffix = "" if use_theory_guess else " (plot only)"
 
+    phase_diagram = None
+    phase_theory = None
+    if first_ds.root:
+        phase_diagram = load_experimental_phase_diagram(first_ds.root)
+    if phase_diagram is not None:
+        try:
+            coeffs = fit_phase_coeffs(phase_diagram, weight=PHASE_WEIGHT)
+            phase_theory = compute_phases(
+                phase_diagram.temps,
+                phase_diagram.fields,
+                coeffs,
+            )
+        except Exception as exc:
+            logger.warning("Не удалось аппроксимировать фазовую диаграмму: %s", exc)
+            phase_diagram = None
+
     specs = [
         [
+            {"type": "xy"},
             {"type": "xy", "rowspan": 3},
             {"type": "xy", "rowspan": 3},
             {"type": "xy", "rowspan": 3},
             {"type": "xy"},
         ],
-        [None, None, None, {"type": "xy"}],
-        [None, None, None, {"type": "xy"}],
+        [{"type": "xy"}, None, None, None, {"type": "xy"}],
+        [None, None, None, None, {"type": "xy"}],
     ]
 
     if varying == "T":
@@ -199,14 +222,59 @@ def visualize_stacked(
 
     fig = make_subplots(
         rows=3,
-        cols=4,
+        cols=5,
         specs=specs,
-        column_widths=[0.26, 0.26, 0.26, 0.22],
+        column_widths=[0.18, 0.22, 0.22, 0.22, 0.16],
         horizontal_spacing=0.06,
         vertical_spacing=0.05,
         shared_xaxes=True,
-        subplot_titles=tuple(titles),
+        subplot_titles=(
+            "Experimental phase diagram",
+            titles[0],
+            titles[1],
+            titles[2],
+            "",
+            "Theoretical phase diagram",
+            "",
+            "",
+        ),
     )
+
+    if phase_diagram is not None and phase_theory is not None:
+        def _axis_from_grid(grid: np.ndarray, axis: int) -> np.ndarray:
+            if grid.ndim == 2:
+                return grid[0, :] if axis == 1 else grid[:, 0]
+            return grid
+
+        temp_axis = _axis_from_grid(phase_diagram.temps, axis=1)
+        field_axis = _axis_from_grid(phase_diagram.fields, axis=0)
+        zmin = float(np.nanmin([np.nanmin(phase_diagram.theta), np.nanmin(phase_theory)]))
+        zmax = float(np.nanmax([np.nanmax(phase_diagram.theta), np.nanmax(phase_theory)]))
+        fig.add_trace(
+            go.Heatmap(
+                x=temp_axis,
+                y=field_axis,
+                z=phase_diagram.theta,
+                coloraxis="coloraxis",
+                zmin=zmin,
+                zmax=zmax,
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Heatmap(
+                x=temp_axis,
+                y=field_axis,
+                z=phase_theory,
+                coloraxis="coloraxis",
+                zmin=zmin,
+                zmax=zmax,
+                showscale=False,
+            ),
+            row=2,
+            col=1,
+        )
 
     for idx, (ds_lf, ds_hf) in enumerate(triples_sorted):
         shift = (idx + 1) * y_step
@@ -214,7 +282,7 @@ def visualize_stacked(
         tmin_lf, tmax_lf = ds_lf.ts.t[0] / NS, ds_lf.ts.t[-1] / NS
         tmin_hf, tmax_hf = ds_hf.ts.t[0] / NS, ds_hf.ts.t[-1] / NS
 
-        for col, (tmin, tmax) in ((1, (tmin_lf, tmax_lf)), (2, (tmin_hf, tmax_hf))):
+        for col, (tmin, tmax) in ((2, (tmin_lf, tmax_lf)), (3, (tmin_hf, tmax_hf))):
             fig.add_trace(
                 go.Scattergl(
                     x=[tmin, tmax],
@@ -240,7 +308,7 @@ def visualize_stacked(
                 name=f"{varying} = {var_value} {var_label}",
             ),
             1,
-            1,
+            3,
         )
 
         if ds_lf.fit:
@@ -266,7 +334,7 @@ def visualize_stacked(
                     name=f"{varying} = {var_value} {var_label}",
                 ),
                 1,
-                1,
+                3,
             )
             fig.add_trace(
                 go.Scattergl(
@@ -278,7 +346,7 @@ def visualize_stacked(
                     name=f"{varying} = {var_value} {var_label}",
                 ),
                 1,
-                1,
+                3,
             )
             fig.add_trace(
                 go.Scattergl(
@@ -290,7 +358,7 @@ def visualize_stacked(
                     name=f"{varying} = {var_value} {var_label}",
                 ),
                 1,
-                1,
+                3,
             )
 
         if ds_hf.fit:
@@ -305,7 +373,7 @@ def visualize_stacked(
                 name=f"{varying} = {var_value} {var_label}",
             ),
             1,
-            2,
+            3,
         )
 
         if ds_hf.fit:
@@ -331,7 +399,7 @@ def visualize_stacked(
                     name=f"{varying} = {var_value} {var_label}",
                 ),
                 1,
-                2,
+                3,
             )
             fig.add_trace(
                 go.Scattergl(
@@ -343,7 +411,7 @@ def visualize_stacked(
                     name=f"{varying} = {var_value} {var_label}",
                 ),
                 1,
-                2,
+                3,
             )
             fig.add_trace(
                 go.Scattergl(
@@ -355,7 +423,7 @@ def visualize_stacked(
                     name=f"{varying} = {var_value} {var_label}",
                 ),
                 1,
-                2,
+                3,
             )
 
         fig.add_annotation(
@@ -366,7 +434,7 @@ def visualize_stacked(
             xanchor="left",
             font=dict(size=16),
             row=1,
-            col=1,
+            col=2,
         )
         fig.add_annotation(
             x=tmax_hf,
@@ -376,7 +444,7 @@ def visualize_stacked(
             xanchor="left",
             font=dict(size=16),
             row=1,
-            col=2,
+            col=3,
         )
 
     if varying == "T":
@@ -393,7 +461,7 @@ def visualize_stacked(
                     error_y=dict(type="data", array=fLF_err, visible=True),
                 ),
                 row=1,
-                col=4,
+                col=5,
             )
             fig.add_trace(
                 go.Scatter(
@@ -406,7 +474,7 @@ def visualize_stacked(
                     error_y=dict(type="data", array=fHF_err, visible=True),
                 ),
                 row=1,
-                col=4,
+                col=5,
             )
         for H_fix, pts in tau_vs_T.items():
             T_vals, tau_LF, tau_HF, tau_LF_err, tau_HF_err = zip(*pts)
@@ -421,7 +489,7 @@ def visualize_stacked(
                     error_y=dict(type="data", array=tau_LF_err, visible=True),
                 ),
                 row=2,
-                col=4,
+                col=5,
             )
             fig.add_trace(
                 go.Scatter(
@@ -434,7 +502,7 @@ def visualize_stacked(
                     error_y=dict(type="data", array=tau_HF_err, visible=True),
                 ),
                 row=2,
-                col=4,
+                col=5,
             )
         for H_fix, pts in amp_vs_T.items():
             T_vals, amp_LF, amp_HF, amp_LF_err, amp_HF_err = zip(*pts)
@@ -449,7 +517,7 @@ def visualize_stacked(
                     error_y=dict(type="data", array=amp_LF_err, visible=True),
                 ),
                 row=3,
-                col=4,
+                col=5,
             )
             fig.add_trace(
                 go.Scatter(
@@ -462,9 +530,9 @@ def visualize_stacked(
                     error_y=dict(type="data", array=amp_HF_err, visible=True),
                 ),
                 row=3,
-                col=4,
+                col=5,
             )
-        fig.update_xaxes(title_text="Temperature (K)", row=3, col=4)
+        fig.update_xaxes(title_text="Temperature (K)", row=3, col=5)
     else:
         for T_fix, pts in freq_vs_H.items():
             H_vals, fLF, fHF, fLF_err, fHF_err = zip(*pts)
@@ -479,7 +547,7 @@ def visualize_stacked(
                     error_y=dict(type="data", array=fLF_err, visible=True),
                 ),
                 row=1,
-                col=4,
+                col=5,
             )
             fig.add_trace(
                 go.Scatter(
@@ -492,7 +560,7 @@ def visualize_stacked(
                     error_y=dict(type="data", array=fHF_err, visible=True),
                 ),
                 row=1,
-                col=4,
+                col=5,
             )
         for T_fix, pts in tau_vs_H.items():
             H_vals, tau_LF, tau_HF, tau_LF_err, tau_HF_err = zip(*pts)
@@ -507,7 +575,7 @@ def visualize_stacked(
                     error_y=dict(type="data", array=tau_LF_err, visible=True),
                 ),
                 row=2,
-                col=4,
+                col=5,
             )
             fig.add_trace(
                 go.Scatter(
@@ -520,7 +588,7 @@ def visualize_stacked(
                     error_y=dict(type="data", array=tau_HF_err, visible=True),
                 ),
                 row=2,
-                col=4,
+                col=5,
             )
         for T_fix, pts in amp_vs_H.items():
             H_vals, amp_LF, amp_HF, amp_LF_err, amp_HF_err = zip(*pts)
@@ -535,7 +603,7 @@ def visualize_stacked(
                     error_y=dict(type="data", array=amp_LF_err, visible=True),
                 ),
                 row=3,
-                col=4,
+                col=5,
             )
             fig.add_trace(
                 go.Scatter(
@@ -548,12 +616,12 @@ def visualize_stacked(
                     error_y=dict(type="data", array=amp_HF_err, visible=True),
                 ),
                 row=3,
-                col=4,
+                col=5,
             )
-        fig.update_xaxes(title_text="Magnetic field (mT)", row=3, col=4)
-    fig.update_yaxes(title_text="Frequency (GHz)", row=1, col=4)
-    fig.update_yaxes(title_text="Decay time (ns)", row=2, col=4)
-    fig.update_yaxes(title_text="Amplitude", row=3, col=4)
+        fig.update_xaxes(title_text="Magnetic field (mT)", row=3, col=5)
+    fig.update_yaxes(title_text="Frequency (GHz)", row=1, col=5)
+    fig.update_yaxes(title_text="Decay time (ns)", row=2, col=5)
+    fig.update_yaxes(title_text="Amplitude", row=3, col=5)
 
     def _calc_range(values: list[float], errors: list[float], *, enforce_zero: bool = False, clamp_zero_if_needed: bool = False):
         if not values:
@@ -586,7 +654,7 @@ def visualize_stacked(
                 errs.extend([e1, e2])
         rng = _calc_range(vals, errs, enforce_zero=enforce_zero, clamp_zero_if_needed=clamp_zero_if_needed)
         if rng is not None:
-            fig.update_yaxes(range=rng, row=row, col=4)
+            fig.update_yaxes(range=rng, row=row, col=5)
 
     target_freq = freq_vs_T if varying == "T" else freq_vs_H
     target_tau = tau_vs_T if varying == "T" else tau_vs_H
@@ -595,7 +663,7 @@ def visualize_stacked(
     _update_axis_range(target_freq, row=1, clamp_zero_if_needed=True)
     _update_axis_range(target_tau, row=2, enforce_zero=True, clamp_zero_if_needed=True)
     _update_axis_range(target_amp, row=3, clamp_zero_if_needed=True)
-    fig.update_yaxes(rangemode="tozero", row=2, col=4)
+    fig.update_yaxes(rangemode="tozero", row=2, col=5)
 
     if theory_curves is not None:
         pass
@@ -706,7 +774,7 @@ def visualize_stacked(
                     showlegend=False,
                 ),
                 row=1,
-                col=3,
+                col=4,
             )
 
             y_vals = amp_lf + offset
@@ -722,7 +790,7 @@ def visualize_stacked(
                     showlegend=False,
                 ),
                 row=1,
-                col=3,
+                col=4,
             )
 
             fig.add_annotation(
@@ -733,7 +801,7 @@ def visualize_stacked(
                 showarrow=False,
                 font=dict(size=16),
                 row=1,
-                col=3,
+                col=4,
             )
 
             fig.add_trace(
@@ -746,7 +814,7 @@ def visualize_stacked(
                     hoverinfo="skip",
                 ),
                 row=1,
-                col=3,
+                col=4,
             )
 
     fig.update_layout(
@@ -757,9 +825,10 @@ def visualize_stacked(
         height=1200,
         paper_bgcolor="white",
         plot_bgcolor="white",
+        coloraxis=dict(colorbar=dict(title="θ (rad)")),
     )
 
-    for annotation in fig["layout"]["annotations"][: len(titles)]:
+    for annotation in fig["layout"]["annotations"]:
         annotation["font"] = dict(size=22)
 
     fig.update_xaxes(
@@ -774,7 +843,7 @@ def visualize_stacked(
         gridwidth=1,
         row=1,
         col=1,
-        title_text="Time (ns)",
+        title_text="Temperature (°C)",
     )
     fig.update_xaxes(
         showline=True,
@@ -802,6 +871,20 @@ def visualize_stacked(
         gridwidth=1,
         row=1,
         col=3,
+        title_text="Time (ns)",
+    )
+    fig.update_xaxes(
+        showline=True,
+        linewidth=1,
+        linecolor="black",
+        mirror=True,
+        showticklabels=True,
+        ticks="inside",
+        showgrid=True,
+        gridcolor="#cccccc",
+        gridwidth=1,
+        row=1,
+        col=4,
         title_text="Frequency (GHz)",
     )
     fig.update_yaxes(
@@ -812,7 +895,7 @@ def visualize_stacked(
         mirror=True,
         showticklabels=False,
         row=1,
-        col=1,
+        col=2,
     )
     fig.update_yaxes(
         range=[0, shift + y_step],
@@ -822,7 +905,7 @@ def visualize_stacked(
         mirror=True,
         showticklabels=False,
         row=1,
-        col=2,
+        col=3,
     )
     fig.update_yaxes(
         range=[0, offset + shift_f],
@@ -832,7 +915,35 @@ def visualize_stacked(
         mirror=True,
         showticklabels=False,
         row=1,
-        col=3,
+        col=4,
+    )
+    for r in (1, 2):
+        fig.update_yaxes(
+            showline=True,
+            linewidth=1,
+            linecolor="black",
+            mirror=True,
+            showticklabels=True,
+            showgrid=True,
+            gridcolor="#cccccc",
+            gridwidth=1,
+            row=r,
+            col=1,
+            title_text="Magnetic field (mT)" if r == 1 else None,
+        )
+    fig.update_xaxes(
+        showline=True,
+        linewidth=1,
+        linecolor="black",
+        mirror=True,
+        showticklabels=True,
+        ticks="inside",
+        showgrid=True,
+        gridcolor="#cccccc",
+        gridwidth=1,
+        row=2,
+        col=1,
+        title_text="Temperature (°C)",
     )
     fig.update_xaxes(
         showline=True,
@@ -843,7 +954,7 @@ def visualize_stacked(
         gridcolor="#cccccc",
         gridwidth=1,
         row=1,
-        col=4,
+        col=5,
     )
     fig.update_yaxes(
         showline=True,
@@ -854,7 +965,7 @@ def visualize_stacked(
         gridcolor="#cccccc",
         gridwidth=1,
         row=1,
-        col=4,
+        col=5,
     )
     for r in (2, 3):
         fig.update_xaxes(
@@ -866,7 +977,7 @@ def visualize_stacked(
             gridcolor="#cccccc",
             gridwidth=1,
             row=r,
-            col=4,
+            col=5,
         )
         fig.update_yaxes(
             showline=True,
@@ -877,7 +988,7 @@ def visualize_stacked(
             gridcolor="#cccccc",
             gridwidth=1,
             row=r,
-            col=4,
+            col=5,
         )
     fig.update_xaxes(title_font=dict(size=28), tickfont=dict(size=24))
     fig.update_yaxes(title_font=dict(size=28), tickfont=dict(size=24))
