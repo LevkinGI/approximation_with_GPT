@@ -34,7 +34,7 @@ def _replace_spike_segment(x: np.ndarray, s: np.ndarray, lower: float, upper: fl
 def load_records(root: Path) -> List[DataSet]:
     """Читает все *.dat файлы в каталоге *root* (или *root/data*)
     и возвращает список DataSet."""
-    pattern = re.compile(r"_(\d+)mT_(\d+)K_(HF|LF)_.*\.dat$", re.IGNORECASE)
+    pattern = re.compile(r"_([+-]?\d+)mT_(\d+)K_(HF|LF)_.*\.dat$", re.IGNORECASE)
     datasets: List[DataSet] = []
     data_dir = root / "data" if (root / "data").is_dir() else root
     logger.info("Поиск данных в %s", data_dir)
