@@ -88,7 +88,7 @@ def _prepare_axis(recs: List[dict]):
 
 def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
                        outfile: Path | None = None) -> None:
-    logger.info("Экспорт таблицы параметров аппроксимации")
+    logger.debug("Экспорт таблицы параметров аппроксимации")
     recs = []
     for lf, _ in triples:
         if lf.fit is None:
@@ -137,7 +137,7 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
             cell.border = Border(diagonal=thin, diagonalDown=True)
             ws.column_dimensions["A"].width = 25
             ws.row_dimensions[1].height = 30
-        logger.info("Таблица сохранена в %s", out_path)
+        logger.debug("Таблица сохранена в %s", out_path)
     except Exception as exc:
         logger.error("Не удалось сохранить %s: %s", out_path, exc)
 

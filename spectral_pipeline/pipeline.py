@@ -190,13 +190,13 @@ def run_pipeline(
     logger.setLevel(level)
     for handler in logger.handlers:
         handler.setLevel(level)
-    logger.info("Лог-файл: %s", LOG_PATH)
+    logger.debug("Лог-файл: %s", LOG_PATH)
 
     resolved_use_theory_guess = cfg.use_theory_guess if use_theory_guess is None else use_theory_guess
     active_cfg = replace(cfg, use_theory_guess=resolved_use_theory_guess)
 
     root = Path(data_dir).resolve()
-    logger.info("Начало обработки каталога %s", root)
+    logger.debug("Начало обработки каталога %s", root)
 
     try:
         datasets = hooks.loader(root, active_cfg)
@@ -205,14 +205,14 @@ def run_pipeline(
     if not datasets:
         logger.error("В каталоге %s отсутствуют файлы .dat", root)
         return None
-    logger.info("Загружено %d файлов", len(datasets))
+    logger.debug("Загружено %d файлов", len(datasets))
 
     grouped = _group_by_conditions(datasets)
     triples, success_count = _fit_pairs(
         grouped, root, hooks=hooks, approximation_config=active_cfg
     )
 
-    logger.info("Успешно аппроксимировано пар: %d", success_count)
+    logger.debug("Успешно аппроксимировано пар: %d", success_count)
 
     if do_plot and success_count:
         try:
@@ -228,5 +228,5 @@ def run_pipeline(
     if success_count:
         hooks.exporter(triples, root, outfile=out_excel)
 
-    logger.info("Завершение обработки каталога %s", root)
+    logger.debug("Завершение обработки каталога %s", root)
     return triples if return_datasets else None
