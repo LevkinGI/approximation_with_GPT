@@ -17,6 +17,10 @@ class ApproximationConfig:
     # Оркестрация пайплайна
     use_theory_guess: bool = True
     force_lf_only: bool = False
+    log_level: str = "DEBUG"
+
+    # Границы оси частот для визуализации спектров, ГГц
+    spectrum_freq_bounds_ghz: Bounds = (0.0, 80.0)
 
     # Полосы поиска частот
     lf_band_hz: BandHz = (0.0, 50 * GHZ)

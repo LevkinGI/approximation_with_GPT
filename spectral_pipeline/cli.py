@@ -88,7 +88,7 @@ def _prepare_axis(recs: List[dict]):
 
 def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
                        outfile: Path | None = None) -> None:
-    logger.info("Экспорт таблицы параметров аппроксимации")
+    logger.debug("Экспорт таблицы параметров аппроксимации")
     recs = []
     for lf, _ in triples:
         if lf.fit is None:
@@ -137,7 +137,7 @@ def export_freq_tables(triples: List[Tuple[DataSet, DataSet]], root: Path,
             cell.border = Border(diagonal=thin, diagonalDown=True)
             ws.column_dimensions["A"].width = 25
             ws.row_dimensions[1].height = 30
-        logger.info("Таблица сохранена в %s", out_path)
+        logger.debug("Таблица сохранена в %s", out_path)
     except Exception as exc:
         logger.error("Не удалось сохранить %s: %s", out_path, exc)
 
@@ -148,7 +148,7 @@ def main(
     return_datasets: bool = False,
     do_plot: bool = True,
     excel_path: str | None = None,
-    log_level: str = "DEBUG",
+    log_level: str | None = None,
     use_theory_guess: bool | None = None,
     approximation_config: ApproximationConfig | None = None,
     hooks: PipelineHooks | None = None,
@@ -202,7 +202,7 @@ def demo(data_dir: str | Path = ".", *, approximation_config: ApproximationConfi
     if not triples:
         raise RuntimeError("Не найдено корректных пар LF/HF")
     cfg = approximation_config or DEFAULT_APPROXIMATION_CONFIG
-    visualize_stacked(triples, use_theory_guess=cfg.use_theory_guess)
+    visualize_stacked(triples, use_theory_guess=cfg.use_theory_guess, approximation_config=cfg)
     print("График открыт в браузере")
 
 
@@ -212,7 +212,7 @@ if __name__ == '__main__':
     parser.add_argument('data_dir', nargs='?', default='.')
     parser.add_argument('--no-plot', action='store_true')
     parser.add_argument('--excel', help='путь к выходному xlsx')
-    parser.add_argument('--log-level', default='DEBUG', help='уровень логирования')
+    parser.add_argument('--log-level', default=None, help='уровень логирования (переопределяет approximation_config.log_level)')
     parser.add_argument(
         '--use-theory-guess',
         dest='use_theory_guess',

@@ -302,7 +302,7 @@ def process_pair(
     lf_band = cfg.lf_band_hz
     hf_band = cfg.hf_band_hz
 
-    logger.info("Обработка пары T=%d K, H=%d mT", ds_lf.temp_K, ds_lf.field_mT)
+    logger.info("Начата аппроксимация сигналов при H=%.0f мТл, T=%.0f К", float(ds_lf.field_mT), float(ds_lf.temp_K))
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
@@ -365,7 +365,7 @@ def process_pair(
         #     else hf_band
         # )
         range_hf = hf_band
-        logger.info(
+        logger.debug(
             "HF fallback range: %.1f–%.1f ГГц",
             range_hf[0] / GHZ,
             range_hf[1] / GHZ,
@@ -380,7 +380,7 @@ def process_pair(
         if f2_fallback is not None:
             if all(abs(f - f2_fallback) >= 20e6 for f, _ in hf_c):
                 hf_c.append((float(f2_fallback), None))
-                logger.info(
+                logger.debug(
                     "(%d, %d): добавлен HF-кандидат %.3f ГГц методом fallback",
                     ds_hf.temp_K,
                     ds_hf.field_mT,
@@ -408,7 +408,7 @@ def process_pair(
         #     else lf_band
         # )
         range_lf = lf_band
-        logger.info(
+        logger.debug(
             "LF fallback range: %.1f–%.1f ГГц",
             range_lf[0] / GHZ,
             range_lf[1] / GHZ,
@@ -424,7 +424,7 @@ def process_pair(
         if f1_fallback is not None:
             if all(abs(f - f1_fallback) >= 20e6 for f, _ in lf_c):
                 lf_c.append((float(f1_fallback), None))
-                logger.info(
+                logger.debug(
                     "(%d, %d): добавлен LF-кандидат %.3f ГГц методом fallback",
                     ds_lf.temp_K,
                     ds_lf.field_mT,
@@ -440,7 +440,7 @@ def process_pair(
 
     if guess is not None:
         f1_guess, f2_guess = guess
-        logger.info(
+        logger.debug(
             "(%d, %d): использованы предварительные оценки f1=%.3f ГГц, f2=%.3f ГГц",
             ds_lf.temp_K, ds_lf.field_mT, f1_guess/GHZ, f2_guess/GHZ)
         spec_lf_c, spec_hf_c, fs_common = _prepare_signals()
@@ -462,7 +462,7 @@ def process_pair(
             )
 
         range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
-        logger.info(
+        logger.debug(
             "HF fallback range: %.1f–%.1f ГГц",
             range_hf[0] / GHZ,
             range_hf[1] / GHZ,
@@ -478,7 +478,7 @@ def process_pair(
             abs(f - f2_fallback) >= 20e6 for f, _ in hf_cand
         ):
             hf_cand.append((float(f2_fallback), None))
-            logger.info(
+            logger.debug(
                 "(%d, %d): добавлен HF-кандидат %.3f ГГц методом fallback",
                 ds_hf.temp_K,
                 ds_hf.field_mT,
@@ -500,7 +500,7 @@ def process_pair(
             )
 
         range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
-        logger.info(
+        logger.debug(
             "LF fallback range: %.1f–%.1f ГГц",
             range_lf[0] / GHZ,
             range_lf[1] / GHZ,
@@ -517,7 +517,7 @@ def process_pair(
             abs(f - f1_fallback) >= 20e6 for f, _ in lf_cand
         ):
             lf_cand.append((float(f1_fallback), None))
-            logger.info(
+            logger.debug(
                 "(%d, %d): добавлен LF-кандидат %.3f ГГц методом fallback",
                 ds_lf.temp_K,
                 ds_lf.field_mT,
@@ -535,7 +535,7 @@ def process_pair(
         freq_bounds = ((f1_guess - 5 * GHZ, f1_guess + 5 * GHZ),
                        (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ))
     else:
-        logger.info("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
+        logger.debug("(%d, %d): поиск предварительных оценок", ds_lf.temp_K, ds_lf.field_mT)
         lf_cand, hf_cand, freq_bounds = _search_candidates()
     fs_hf = 1.0 / float(np.mean(np.diff(t_hf)))
     fs_lf = 1.0 / float(np.mean(np.diff(t_lf)))
@@ -566,13 +566,13 @@ def process_pair(
         range_hf = f"{start_band_HF:.0f}–{hf_band[1]/GHZ:.0f}"
 
     if f1_hz is not None:
-        logger.info(
+        logger.debug(
             f"({ds_lf.temp_K}, {ds_lf.field_mT}): найден пик  f1 = {f1_hz/1e9:.1f} ГГц ({range_lf})")
     else:
         logger.warning(
             f"({ds_lf.temp_K}, {ds_lf.field_mT}): в полосе {range_lf} ГГц пиков не найдено")
     if f2_hz is not None:
-        logger.info(
+        logger.debug(
             f"({ds_lf.temp_K}, {ds_lf.field_mT}): найден пик  f2 = {f2_hz/1e9:.1f} ГГц ({range_hf})")
     else:
         logger.warning(
@@ -594,7 +594,7 @@ def process_pair(
                 )
                 return False
         target_list.append((float(new_freq_hz), None))
-        logger.info(
+        logger.debug(
             "(%d, %d) %s: добавлен кандидат %.3f ГГц (%s)",
             ds_lf.temp_K,
             ds_lf.field_mT,
@@ -628,8 +628,8 @@ def process_pair(
         if hf_band[0] <= freq_hz <= hf_band[1]:
             _append_unique(hf_cand, freq_hz, label="HF", source="CWT")
 
-    logger.info("LF candidates: %s", [(round(f/GHZ,3), z) for f, z in lf_cand])
-    logger.info("HF candidates: %s", [(round(f/GHZ,3), z) for f, z in hf_cand])
+    logger.debug("LF candidates: %s", [(round(f/GHZ,3), z) for f, z in lf_cand])
+    logger.debug("HF candidates: %s", [(round(f/GHZ,3), z) for f, z in hf_cand])
 
     seen: set[tuple[float, float]] = set()
     best_cost = np.inf
@@ -714,7 +714,7 @@ def process_pair(
         logger.error("(%d, %d): ни одна комбинация не аппроксимировалась", ds_lf.temp_K, ds_lf.field_mT)
         raise RuntimeError("Ни одна комбинация не аппроксимировалась")
     if best_fit.f1 > best_fit.f2:
-        logger.info(
+        logger.debug(
             "(%d, %d): f1=%.3f ГГц > f2=%.3f ГГц, перестановка",
             ds_lf.temp_K,
             ds_lf.field_mT,
@@ -763,12 +763,9 @@ def process_pair(
     else:
         ds_lf.fit = ds_hf.fit = best_fit
         logger.info(
-            "(%d, %d): аппроксимация успешна f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
-            ds_lf.temp_K,
-            ds_lf.field_mT,
+            "Результат аппроксимации: f1=%.2f ГГц, f2=%.2f ГГц",
             best_fit.f1 / GHZ,
             best_fit.f2 / GHZ,
-            best_fit.cost,
         )
         return best_fit
 
@@ -956,9 +953,9 @@ def process_lf_only(
     hf_band = cfg.hf_band_hz
 
     logger.info(
-        "LF-only обработка пары T=%d K, H=%d mT",
-        ds_lf.temp_K,
-        ds_lf.field_mT,
+        "Начата аппроксимация сигналов при H=%.0f мТл, T=%.0f К",
+        float(ds_lf.field_mT),
+        float(ds_lf.temp_K),
     )
     t, y = ds_lf.ts.t, ds_lf.ts.s
 
@@ -1006,7 +1003,7 @@ def process_lf_only(
             if f2_rough is not None
             else hf_band
         )
-        logger.info(
+        logger.debug(
             "HF fallback range: %.1f–%.1f ГГц",
             range_hf[0] / GHZ,
             range_hf[1] / GHZ,
@@ -1021,7 +1018,7 @@ def process_lf_only(
         if f2_fallback is not None:
             if all(abs(f - f2_fallback) >= 20e6 for f, _ in hf_c):
                 hf_c.append((float(f2_fallback), None))
-                logger.info(
+                logger.debug(
                     "(%d, %d): добавлен HF-кандидат %.3f ГГц методом fallback (LF only)",
                     ds_lf.temp_K,
                     ds_lf.field_mT,
@@ -1055,7 +1052,7 @@ def process_lf_only(
             if f1_rough is not None
             else lf_band
         )
-        logger.info(
+        logger.debug(
             "LF fallback range: %.1f–%.1f ГГц",
             range_lf[0] / GHZ,
             range_lf[1] / GHZ,
@@ -1071,7 +1068,7 @@ def process_lf_only(
         if f1_fallback is not None:
             if all(abs(f - f1_fallback) >= 20e6 for f, _ in lf_c):
                 lf_c.append((float(f1_fallback), None))
-                logger.info(
+                logger.debug(
                     "(%d, %d): добавлен LF-кандидат %.3f ГГц методом fallback (LF only)",
                     ds_lf.temp_K,
                     ds_lf.field_mT,
@@ -1087,7 +1084,7 @@ def process_lf_only(
 
     if guess is not None:
         f1_guess, f2_guess = guess
-        logger.info(
+        logger.debug(
             "(%d, %d): использованы предварительные оценки f1=%.3f ГГц, f2=%.3f ГГц",
             ds_lf.temp_K,
             ds_lf.field_mT,
@@ -1114,7 +1111,7 @@ def process_lf_only(
             )
 
         range_hf = (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ)
-        logger.info(
+        logger.debug(
             "HF fallback range: %.1f–%.1f ГГц",
             range_hf[0] / GHZ,
             range_hf[1] / GHZ,
@@ -1130,7 +1127,7 @@ def process_lf_only(
             abs(f - f2_fallback) >= 20e6 for f, _ in hf_cand
         ):
             hf_cand.append((float(f2_fallback), None))
-            logger.info(
+            logger.debug(
                 "(%d, %d): добавлен HF-кандидат %.3f ГГц методом fallback (LF only)",
                 ds_lf.temp_K,
                 ds_lf.field_mT,
@@ -1153,7 +1150,7 @@ def process_lf_only(
             )
 
         range_lf = (f1_guess - 5 * GHZ, f1_guess + 5 * GHZ)
-        logger.info(
+        logger.debug(
             "LF fallback range: %.1f–%.1f ГГц",
             range_lf[0] / GHZ,
             range_lf[1] / GHZ,
@@ -1170,7 +1167,7 @@ def process_lf_only(
             abs(f - f1_fallback) >= 20e6 for f, _ in lf_cand
         ):
             lf_cand.append((float(f1_fallback), None))
-            logger.info(
+            logger.debug(
                 "(%d, %d): добавлен LF-кандидат %.3f ГГц методом fallback (LF only)",
                 ds_lf.temp_K,
                 ds_lf.field_mT,
@@ -1192,7 +1189,7 @@ def process_lf_only(
             (f2_guess - 5 * GHZ, f2_guess + 5 * GHZ),
         )
     else:
-        logger.info(
+        logger.debug(
             "(%d, %d): поиск предварительных оценок (LF only)",
             ds_lf.temp_K,
             ds_lf.field_mT,
@@ -1284,11 +1281,8 @@ def process_lf_only(
 
     ds_lf.fit = best_fit
     logger.info(
-        "(%d, %d): аппроксимация успешна f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
-        ds_lf.temp_K,
-        ds_lf.field_mT,
+        "Результат аппроксимации: f1=%.2f ГГц, f2=%.2f ГГц",
         best_fit.f1 / GHZ,
         best_fit.f2 / GHZ,
-        best_fit.cost,
     )
     return best_fit

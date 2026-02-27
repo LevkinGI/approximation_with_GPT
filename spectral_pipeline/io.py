@@ -39,7 +39,7 @@ def load_records(root: Path, approximation_config: ApproximationConfig | None = 
     pattern = re.compile(r"_([+-]?\d+)mT_(\d+)K_(HF|LF)_.*\.dat$", re.IGNORECASE)
     datasets: List[DataSet] = []
     data_dir = root / "data" if (root / "data").is_dir() else root
-    logger.info("Поиск данных в %s", data_dir)
+    logger.debug("Поиск данных в %s", data_dir)
     for path in sorted(data_dir.glob("*.dat")):
         m = pattern.search(path.name)
         if not m:
@@ -110,6 +110,6 @@ def load_records(root: Path, approximation_config: ApproximationConfig | None = 
         ts = TimeSeries(t=t, s=s, meta=RecordMeta(fs=fs))
         datasets.append(DataSet(field_mT=field_mT, temp_K=temp_K, tag=tag,
                                ts=ts, root=data_dir, additive_const_init=additive_const))
-        logger.info("Загружен %s: %d точек, fs=%.2f ГГц", path.name, len(t), fs / GHZ)
-    logger.info("Загружено %d наборов", len(datasets))
+        logger.debug("Загружен %s: %d точек, fs=%.2f ГГц", path.name, len(t), fs / GHZ)
+    logger.debug("Загружено %d наборов", len(datasets))
     return datasets

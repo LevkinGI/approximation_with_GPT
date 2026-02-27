@@ -76,13 +76,13 @@ def _peak_in_band(
 
     expansions = 0
     while True:
-        logger.info("FFT peak search: %.1f–%.1f ГГц", fmin_GHz, fmax_GHz)
+        logger.debug("FFT peak search: %.1f–%.1f ГГц", fmin_GHz, fmax_GHz)
         mask = (freqs >= fmin_GHz * GHZ) & (freqs <= fmax_GHz * GHZ)
         if not mask.any():
-            logger.info(
+            logger.debug(
                 "No data in range %.1f–%.1f ГГц", fmin_GHz, fmax_GHz,
             )
-            logger.info(
+            logger.debug(
                 "Total expansions: %d, final range %.1f–%.1f ГГц",
                 expansions,
                 fmin_GHz,
@@ -92,10 +92,10 @@ def _peak_in_band(
         f_band = freqs[mask]
         a_band = amps[mask]
         if a_band.size < 3:
-            logger.info(
+            logger.debug(
                 "Not enough points in range %.1f–%.1f ГГц", fmin_GHz, fmax_GHz,
             )
-            logger.info(
+            logger.debug(
                 "Total expansions: %d, final range %.1f–%.1f ГГц",
                 expansions,
                 fmin_GHz,
@@ -155,7 +155,7 @@ def _peak_in_band(
                 expansions += 1
                 fmin_GHz -= expansion_step_GHz
                 fmax_GHz += expansion_step_GHz
-                logger.info(
+                logger.debug(
                     "Peak near boundary, expanding search to %.1f–%.1f ГГц (attempt %d/%d)",
                     fmin_GHz,
                     fmax_GHz,
@@ -163,13 +163,13 @@ def _peak_in_band(
                     max_expansions,
                 )
                 continue
-            logger.info(
+            logger.debug(
                 "Peak near boundary even after %d expansions: %.1f–%.1f ГГц",
                 expansions,
                 fmin_GHz,
                 fmax_GHz,
             )
-            logger.info(
+            logger.debug(
                 "Total expansions: %d, final range %.1f–%.1f ГГц",
                 expansions,
                 fmin_GHz,
@@ -178,20 +178,20 @@ def _peak_in_band(
             return None
 
         if found_peak:
-            logger.info(
+            logger.debug(
                 "Peak found at %.3f ГГц within %.1f–%.1f ГГц",
                 f_best / GHZ,
                 fmin_GHz,
                 fmax_GHz,
             )
         else:
-            logger.info(
+            logger.debug(
                 "Selected fallback peak %.3f ГГц within %.1f–%.1f ГГц",
                 f_best / GHZ,
                 fmin_GHz,
                 fmax_GHz,
             )
-        logger.info(
+        logger.debug(
             "Total expansions: %d, final range %.1f–%.1f ГГц",
             expansions,
             fmin_GHz,
@@ -220,7 +220,7 @@ def _fallback_peak(
 
     nperseg = len(y) // 4
     if nperseg < 8:
-        logger.info("Signal too short for fallback peak search: %d samples", len(y))
+        logger.debug("Signal too short for fallback peak search: %d samples", len(y))
         return None
     try:
         ar, _ = burg(y - y.mean(), order=order_burg)

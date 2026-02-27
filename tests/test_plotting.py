@@ -1,5 +1,6 @@
 import pathlib
 
+from spectral_pipeline.approximation_config import ApproximationConfig
 from spectral_pipeline.io import load_records
 from spectral_pipeline.plotting import visualize_stacked
 
@@ -17,5 +18,6 @@ def test_visualize_stacked_html(tmp_path):
             pairs.append((pair["LF"], pair["HF"]))
     assert pairs
     out = tmp_path / "plot.html"
-    visualize_stacked(pairs, outfile=str(out))
+    cfg = ApproximationConfig(spectrum_freq_bounds_ghz=(5.0, 40.0))
+    visualize_stacked(pairs, outfile=str(out), approximation_config=cfg)
     assert out.exists() and out.stat().st_size > 0
