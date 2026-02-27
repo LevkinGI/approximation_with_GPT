@@ -815,7 +815,6 @@ def visualize_stacked(
         row=1,
         col=3,
         title_text="Frequency (GHz)",
-        range=[freq_lo_ghz, freq_hi_ghz],
     )
     fig.update_yaxes(
         range=[0, shift + y_step],
