@@ -91,13 +91,14 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     C_lf_init = np.mean(y_lf)
     C_hf_init = np.mean(y_hf)
 
+    shared_A_init = max(0.0, 0.5 * (A1_init + A2_init))
+
     p0 = np.array([
         k_lf_init, k_hf_init,
         C_lf_init, C_hf_init,
-        A1_init,    A2_init,
+        shared_A_init,
         tau1_init,  tau2_init,
         f1_init,    f2_init,
-        phi1_init,  phi2_init
     ])
 
     if freq_bounds is None:
@@ -109,18 +110,16 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     lo = np.array([
         0.5, 0.5,
         C_lf_init - np.std(y_lf), C_hf_init - np.std(y_hf),
-        0.0, 0.0,
+        0.0,
         tau1_lo, tau2_lo,
         f1_lo, f2_lo,
-        -PI-1e-5, -PI-1e-5
     ])
     hi = np.array([
         2, 2,
         C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf),
-        A1_init * 2, A2_init * 2,
+        max(1e-12, shared_A_init * 2),
         tau1_hi, tau2_hi,
         f1_hi, f2_hi,
-        PI+1e-5, PI+1e-5
     ])
 
     p0 = np.clip(p0, lo, hi)
@@ -173,18 +172,15 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     sigma_k_hf = _sigma(1)
     sigma_C_lf = _sigma(2)
     sigma_C_hf = _sigma(3)
-    sigma_A1 = _sigma(4)
-    sigma_A2 = _sigma(5)
-    sigma_tau1 = _sigma(6)
-    sigma_tau2 = _sigma(7)
-    sigma_f1 = _sigma(8)
-    sigma_f2 = _sigma(9)
-    sigma_phi1 = _sigma(10)
-    sigma_phi2 = _sigma(11)
+    sigma_A = _sigma(4)
+    sigma_tau1 = _sigma(5)
+    sigma_tau2 = _sigma(6)
+    sigma_f1 = _sigma(7)
+    sigma_f2 = _sigma(8)
 
     (k_lf, k_hf, C_lf, C_hf,
-      A1, A2, tau1, tau2,
-      f1_fin, f2_fin, phi1_fin, phi2_fin) = p
+      A_shared, tau1, tau2,
+      f1_fin, f2_fin) = p
     logger.debug(
         "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
         f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
@@ -194,10 +190,10 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         f2=f2_fin,
         zeta1=1/tau1,
         zeta2=1/tau2,
-        phi1=phi1_fin,
-        phi2=phi2_fin,
-        A1=A1,
-        A2=A2,
+        phi1=0.0,
+        phi2=0.0,
+        A1=A_shared,
+        A2=A_shared,
         k_lf=k_lf,
         k_hf=k_hf,
         C_lf=C_lf,
@@ -208,12 +204,12 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         k_hf_err=sigma_k_hf,
         C_lf_err=sigma_C_lf,
         C_hf_err=sigma_C_hf,
-        A1_err=sigma_A1,
-        A2_err=sigma_A2,
+        A1_err=sigma_A,
+        A2_err=sigma_A,
         tau1_err=sigma_tau1,
         tau2_err=sigma_tau2,
-        phi1_err=sigma_phi1,
-        phi2_err=sigma_phi2,
+        phi1_err=0.0,
+        phi2_err=0.0,
         cost=cost,
     ), cost
 
@@ -728,17 +724,16 @@ def fit_single(ds: DataSet,
         if ds.additive_const_init is not None and np.isfinite(ds.additive_const_init)
         else np.mean(y)
     )
+    shared_A_init = max(0.0, 0.5 * (A1_init + A2_init))
+
     p0 = np.array([
         k_init,
         C_init,
-        A1_init,
-        A2_init,
+        shared_A_init,
         tau1_init,
         tau2_init,
         f1_init,
         f2_init,
-        phi1_init,
-        phi2_init,
     ])
 
     if freq_bounds is None:
@@ -751,25 +746,19 @@ def fit_single(ds: DataSet,
         0.5,
         C_init - np.std(y),
         0.0,
-        0.0,
         tau1_lo,
         tau2_lo,
         f1_lo,
         f2_lo,
-        -PI-1e-5,
-        -PI-1e-5,
     ])
     hi = np.array([
         2.0,
         C_init + np.std(y),
-        A1_init * 2,
-        A2_init * 2,
+        max(1e-12, shared_A_init * 2),
         tau1_hi,
         tau2_hi,
         f1_hi,
         f2_hi,
-        PI+1e-5,
-        PI+1e-5,
     ])
 
     p0 = np.clip(p0, lo, hi)
@@ -811,17 +800,14 @@ def fit_single(ds: DataSet,
 
     sigma_k = _sigma(0)
     sigma_C = _sigma(1)
-    sigma_A1 = _sigma(2)
-    sigma_A2 = _sigma(3)
-    sigma_tau1 = _sigma(4)
-    sigma_tau2 = _sigma(5)
-    sigma_f1 = _sigma(6)
-    sigma_f2 = _sigma(7)
-    sigma_phi1 = _sigma(8)
-    sigma_phi2 = _sigma(9)
+    sigma_A = _sigma(2)
+    sigma_tau1 = _sigma(3)
+    sigma_tau2 = _sigma(4)
+    sigma_f1 = _sigma(5)
+    sigma_f2 = _sigma(6)
 
-    (k_fin, C_fin, A1_fin, A2_fin, tau1_fin, tau2_fin,
-     f1_fin, f2_fin, phi1_fin, phi2_fin) = p
+    (k_fin, C_fin, A_fin, tau1_fin, tau2_fin,
+     f1_fin, f2_fin) = p
     logger.debug(
         "Результат LF-only: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
         f1_fin / GHZ,
@@ -837,10 +823,10 @@ def fit_single(ds: DataSet,
             f2=f2_fin,
             zeta1=1 / tau1_fin,
             zeta2=1 / tau2_fin,
-            phi1=phi1_fin,
-            phi2=phi2_fin,
-            A1=A1_fin,
-            A2=A2_fin,
+            phi1=0.0,
+            phi2=0.0,
+            A1=A_fin,
+            A2=A_fin,
             k_lf=k_fin,
             k_hf=float("nan"),
             C_lf=C_fin,
@@ -851,12 +837,12 @@ def fit_single(ds: DataSet,
             k_hf_err=float("nan"),
             C_lf_err=sigma_C,
             C_hf_err=float("nan"),
-            A1_err=sigma_A1,
-            A2_err=sigma_A2,
+            A1_err=sigma_A,
+            A2_err=sigma_A,
             tau1_err=sigma_tau1,
             tau2_err=sigma_tau2,
-            phi1_err=sigma_phi1,
-            phi2_err=sigma_phi2,
+            phi1_err=0.0,
+            phi2_err=0.0,
             cost=cost,
         ),
         cost,

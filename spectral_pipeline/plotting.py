@@ -256,8 +256,8 @@ def visualize_stacked(
                 p.phi2,
             )
             y_fit = p.k_lf * core + shift
-            y_lf = p.k_lf * (p.A1 * np.exp(-ds_lf.ts.t * p.zeta1) * np.cos(2*np.pi*p.f1*ds_lf.ts.t + p.phi1)) + shift
-            y_hf = p.k_lf * (p.A2 * np.exp(-ds_lf.ts.t * p.zeta2) * np.cos(2*np.pi*p.f2*ds_lf.ts.t + p.phi2)) + shift
+            y_lf = p.k_lf * (p.A1 * np.exp(-ds_lf.ts.t * p.zeta1) * np.sin(2*np.pi*p.f1*ds_lf.ts.t)) + shift
+            y_hf = p.k_lf * (p.A2 * np.exp(-ds_lf.ts.t * p.zeta2) * np.sin(2*np.pi*p.f2*ds_lf.ts.t)) + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_lf.ts.t / NS,
@@ -321,8 +321,8 @@ def visualize_stacked(
                 p.phi2,
             )
             y_fit = p.k_hf * core + shift
-            y_lf = p.k_hf * (p.A1 * np.exp(-ds_hf.ts.t * p.zeta1) * np.cos(2*np.pi*p.f1*ds_hf.ts.t + p.phi1)) + shift
-            y_hf = p.k_hf * (p.A2 * np.exp(-ds_hf.ts.t * p.zeta2) * np.cos(2*np.pi*p.f2*ds_hf.ts.t + p.phi2)) + shift
+            y_lf = p.k_hf * (p.A1 * np.exp(-ds_hf.ts.t * p.zeta1) * np.sin(2*np.pi*p.f1*ds_hf.ts.t)) + shift
+            y_hf = p.k_hf * (p.A2 * np.exp(-ds_hf.ts.t * p.zeta2) * np.sin(2*np.pi*p.f2*ds_hf.ts.t)) + shift
             fig.add_trace(
                 go.Scattergl(
                     x=ds_hf.ts.t / NS,
