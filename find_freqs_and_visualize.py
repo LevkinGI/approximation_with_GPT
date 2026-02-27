@@ -8,8 +8,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('data_dir', nargs='?', default='.')
     parser.add_argument('--no-plot', action='store_true')
-    parser.add_argument('--log-level', default='DEBUG',
-                        help='уровень логирования (INFO, DEBUG и т.д.)')
+    parser.add_argument('--log-level', default=None,
+                        help='уровень логирования (INFO, DEBUG и т.д.; по умолчанию берется из ApproximationConfig)')
     parser.add_argument(
         '--use-theory-guess',
         dest='use_theory_guess',
