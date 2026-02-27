@@ -302,7 +302,7 @@ def process_pair(
     lf_band = cfg.lf_band_hz
     hf_band = cfg.hf_band_hz
 
-    logger.info("Сейчас аппроксимируется сигнал при (H=%d mT, T=%d K)", ds_lf.field_mT, ds_lf.temp_K)
+    logger.info("Начата аппроксимация сигналов при H=%.0f mT, T=%.0f K", float(ds_lf.field_mT), float(ds_lf.temp_K))
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
@@ -763,7 +763,7 @@ def process_pair(
     else:
         ds_lf.fit = ds_hf.fit = best_fit
         logger.info(
-            "Результат аппроксимации: f1=%.3f ГГц, f2=%.3f ГГц",
+            "Результат аппроксимации: f1=%.2f ГГц, f2=%.2f ГГц",
             best_fit.f1 / GHZ,
             best_fit.f2 / GHZ,
         )
@@ -953,9 +953,9 @@ def process_lf_only(
     hf_band = cfg.hf_band_hz
 
     logger.info(
-        "Сейчас аппроксимируется сигнал при (H=%d mT, T=%d K)",
-        ds_lf.field_mT,
-        ds_lf.temp_K,
+        "Начата аппроксимация сигналов при H=%.0f mT, T=%.0f K",
+        float(ds_lf.field_mT),
+        float(ds_lf.temp_K),
     )
     t, y = ds_lf.ts.t, ds_lf.ts.s
 
@@ -1281,7 +1281,7 @@ def process_lf_only(
 
     ds_lf.fit = best_fit
     logger.info(
-        "Результат аппроксимации: f1=%.3f ГГц, f2=%.3f ГГц",
+        "Результат аппроксимации: f1=%.2f ГГц, f2=%.2f ГГц",
         best_fit.f1 / GHZ,
         best_fit.f2 / GHZ,
     )
