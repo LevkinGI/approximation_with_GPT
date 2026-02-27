@@ -7,6 +7,7 @@ from numpy.typing import NDArray
 from scipy.optimize import least_squares
 
 from . import DataSet, FittingResult, GHZ, PI, logger, LF_BAND, HF_BAND
+from .approximation_config import ApproximationConfig, DEFAULT_APPROXIMATION_CONFIG
 from . import esprit_utils as _esprit_module
 from .cwt_candidates import _cwt_gaussian_candidates, _top2_nearest
 from .esprit_utils import multichannel_esprit, _esprit_freqs_and_decay
@@ -16,11 +17,40 @@ from .spectrum_analysis import (
     _peak_in_band,
 )
 from .initial_guess import _load_guess, _resolve_tau_bounds, _single_sine_refine
-from .numba_models import _core_signal, _numba_residuals, _numba_residuals_single
+from .numba_models import (
+    _core_signal,
+    _numba_residuals,
+    _numba_residuals_single,
+    _numba_residuals_sine_zero_phase_equal_amp,
+    _numba_residuals_single_sine_zero_phase_equal_amp,
+)
 
-# Maximum acceptable fitting cost. Pairs with higher cost are rejected
-# and treated as unsuccessful.
-MAX_COST = 100
+
+
+
+MAX_COST = DEFAULT_APPROXIMATION_CONFIG.max_cost
+
+
+def _effective_config(cfg: ApproximationConfig | None) -> ApproximationConfig:
+    return cfg or DEFAULT_APPROXIMATION_CONFIG
+
+
+def _zero_phase_mode(cfg: ApproximationConfig) -> bool:
+    return cfg.equal_phases and cfg.zero_phases_if_equal and cfg.use_sine_for_zero_phase
+
+
+def _build_least_squares_kwargs(cfg: ApproximationConfig) -> dict:
+    return dict(
+        method='trf',
+        ftol=cfg.ftol,
+        xtol=cfg.xtol,
+        gtol=cfg.gtol,
+        max_nfev=cfg.max_nfev,
+        loss=cfg.loss,
+        f_scale=cfg.f_scale,
+        x_scale=cfg.x_scale,
+        verbose=0,
+    )
 
 
 def _run_multichannel_esprit(signals: List[NDArray], fs: float, p: int = 6) -> tuple[NDArray, NDArray]:
@@ -33,7 +63,9 @@ def _run_multichannel_esprit(signals: List[NDArray], fs: float, p: int = 6) -> t
 
 
 def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
-             freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
+             freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None,
+             approximation_config: ApproximationConfig | None = None):
+    cfg = _effective_config(approximation_config)
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
 
@@ -54,13 +86,10 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
 
     f1_init = ds_lf.f1_init
     f2_init = ds_hf.f2_init
-    logger.debug(
-        "Начальные оценки: f1=%.3f ГГц, f2=%.3f ГГц", f1_init/GHZ, f2_init/GHZ)
+    logger.debug("Начальные оценки: f1=%.3f ГГц, f2=%.3f ГГц", f1_init / GHZ, f2_init / GHZ)
 
     _, phi1_init, A1_init, tau1_init = _single_sine_refine(t_lf, y_lf, f1_init)
-    tau1_init, tau1_lo, tau1_hi = _resolve_tau_bounds(
-        ds_lf.zeta1, tau1_init, 5e-11, 5e-9
-    )
+    tau1_init, tau1_lo, tau1_hi = _resolve_tau_bounds(ds_lf.zeta1, tau1_init, 5e-11, 5e-9)
 
     proto_lf_hf = A1_init * np.exp(-t_hf / tau1_init) * np.cos(2 * PI * f1_init * t_hf + phi1_init)
 
@@ -82,24 +111,17 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     A1_init *= hf_scale
 
     _, phi2_init, A2_init, tau2_init = _single_sine_refine(t_hf, y_hf - proto_lf_hf, f2_init)
-    tau2_init, tau2_lo, tau2_hi = _resolve_tau_bounds(
-        ds_hf.zeta2, tau2_init, 5e-12, 5e-10
-    )
+    tau2_init, tau2_lo, tau2_hi = _resolve_tau_bounds(ds_hf.zeta2, tau2_init, 5e-12, 5e-10)
 
     k_lf_init = 1
     k_hf_init = 1
     C_lf_init = np.mean(y_lf)
     C_hf_init = np.mean(y_hf)
 
-    shared_A_init = max(0.0, 0.5 * (A1_init + A2_init))
-
-    p0 = np.array([
-        k_lf_init, k_hf_init,
-        C_lf_init, C_hf_init,
-        shared_A_init,
-        tau1_init,  tau2_init,
-        f1_init,    f2_init,
-    ])
+    if cfg.equal_amplitudes:
+        A_init = max(0.0, 0.5 * (A1_init + A2_init))
+    if cfg.equal_phases:
+        phi_init = 0.5 * (phi1_init + phi2_init)
 
     if freq_bounds is None:
         f1_lo, f1_hi = f1_init * 0.9, f1_init * 1.2
@@ -107,21 +129,37 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     else:
         (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
 
-    lo = np.array([
-        0.5, 0.5,
-        C_lf_init - np.std(y_lf), C_hf_init - np.std(y_hf),
-        0.0,
-        tau1_lo, tau2_lo,
-        f1_lo, f2_lo,
-    ])
-    hi = np.array([
-        2, 2,
-        C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf),
-        max(1e-12, shared_A_init * 2),
-        tau1_hi, tau2_hi,
-        f1_hi, f2_hi,
-    ])
+    p0 = [k_lf_init, k_hf_init, C_lf_init, C_hf_init]
+    lo = [0.5, 0.5, C_lf_init - np.std(y_lf), C_hf_init - np.std(y_hf)]
+    hi = [2.0, 2.0, C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf)]
 
+    if cfg.equal_amplitudes:
+        p0.append(A_init)
+        lo.append(0.0)
+        hi.append(max(1e-12, A_init * 2))
+    else:
+        p0.extend([A1_init, A2_init])
+        lo.extend([0.0, 0.0])
+        hi.extend([max(1e-12, A1_init * 2), max(1e-12, A2_init * 2)])
+
+    p0.extend([tau1_init, tau2_init, f1_init, f2_init])
+    lo.extend([tau1_lo, tau2_lo, f1_lo, f2_lo])
+    hi.extend([tau1_hi, tau2_hi, f1_hi, f2_hi])
+
+    zero_phase_mode = _zero_phase_mode(cfg)
+    if not zero_phase_mode:
+        if cfg.equal_phases:
+            p0.append(phi_init)
+            lo.append(-PI - 1e-5)
+            hi.append(PI + 1e-5)
+        else:
+            p0.extend([phi1_init, phi2_init])
+            lo.extend([-PI - 1e-5, -PI - 1e-5])
+            hi.extend([PI + 1e-5, PI + 1e-5])
+
+    p0 = np.array(p0)
+    lo = np.array(lo)
+    hi = np.array(hi)
     p0 = np.clip(p0, lo, hi)
 
     t_all = np.concatenate((t_lf, t_hf))
@@ -136,21 +174,39 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     weights_hf = np.full(n_hf, norm_hf, dtype=y_hf.dtype)
     weights_all = np.concatenate((weights_lf, weights_hf))
 
-    def residuals(p):
-        return _numba_residuals(p, t_all, y_all, weights_all, split_idx)
+    if zero_phase_mode and cfg.equal_amplitudes:
+        residuals = lambda p: _numba_residuals_sine_zero_phase_equal_amp(p, t_all, y_all, weights_all, split_idx)
+    elif (not zero_phase_mode) and (not cfg.equal_amplitudes) and (not cfg.equal_phases):
+        residuals = lambda p: _numba_residuals(p, t_all, y_all, weights_all, split_idx)
+    else:
+        def residuals(p):
+            idx = 0
+            k_lf, k_hf, C_lf, C_hf = p[idx:idx + 4]
+            idx += 4
+            if cfg.equal_amplitudes:
+                A1 = A2 = p[idx]
+                idx += 1
+            else:
+                A1, A2 = p[idx:idx + 2]
+                idx += 2
+            tau1, tau2, f1, f2 = p[idx:idx + 4]
+            idx += 4
+            if zero_phase_mode:
+                phi1 = 0.0
+                phi2 = 0.0
+                signal = A1 * np.exp(-t_all / tau1) * np.sin(2 * np.pi * f1 * t_all) + A2 * np.exp(-t_all / tau2) * np.sin(2 * np.pi * f2 * t_all)
+            else:
+                if cfg.equal_phases:
+                    phi1 = phi2 = p[idx]
+                else:
+                    phi1, phi2 = p[idx:idx + 2]
+                signal = A1 * np.exp(-t_all / tau1) * np.cos(2 * np.pi * f1 * t_all + phi1) + A2 * np.exp(-t_all / tau2) * np.cos(2 * np.pi * f2 * t_all + phi2)
+            res = np.empty_like(y_all)
+            res[:split_idx] = (k_lf * signal[:split_idx] + C_lf - y_all[:split_idx]) * weights_all[:split_idx]
+            res[split_idx:] = (k_hf * signal[split_idx:] + C_hf - y_all[split_idx:]) * weights_all[split_idx:]
+            return res
 
-    sol = least_squares(
-        residuals,
-        p0,
-        bounds=(lo, hi),
-        method='trf',
-        ftol=3e-16, xtol=3e-16, gtol=3e-16,
-        max_nfev=5000,
-        loss='soft_l1',
-        f_scale=0.1,
-        x_scale='jac',
-        verbose=0,
-    )
+    sol = least_squares(residuals, p0, bounds=(lo, hi), **_build_least_squares_kwargs(cfg))
     p = sol.x
     cost = sol.cost
     m, n = sol.jac.shape
@@ -160,6 +216,8 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         cov = np.full((n, n), np.nan)
 
     def _sigma(idx: int) -> float:
+        if idx < 0:
+            return 0.0
         try:
             val = float(cov[idx, idx])
         except Exception:
@@ -168,32 +226,46 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
             return float("nan")
         return math.sqrt(val)
 
-    sigma_k_lf = _sigma(0)
-    sigma_k_hf = _sigma(1)
-    sigma_C_lf = _sigma(2)
-    sigma_C_hf = _sigma(3)
-    sigma_A = _sigma(4)
-    sigma_tau1 = _sigma(5)
-    sigma_tau2 = _sigma(6)
-    sigma_f1 = _sigma(7)
-    sigma_f2 = _sigma(8)
+    idx = 0
+    k_lf, k_hf, C_lf, C_hf = p[idx:idx + 4]
+    sigma_k_lf, sigma_k_hf, sigma_C_lf, sigma_C_hf = (_sigma(idx), _sigma(idx+1), _sigma(idx+2), _sigma(idx+3))
+    idx += 4
 
-    (k_lf, k_hf, C_lf, C_hf,
-      A_shared, tau1, tau2,
-      f1_fin, f2_fin) = p
-    logger.debug(
-        "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
-        f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
+    if cfg.equal_amplitudes:
+        A1 = A2 = p[idx]
+        sigma_A1 = sigma_A2 = _sigma(idx)
+        idx += 1
+    else:
+        A1, A2 = p[idx:idx+2]
+        sigma_A1, sigma_A2 = _sigma(idx), _sigma(idx+1)
+        idx += 2
+
+    tau1, tau2, f1_fin, f2_fin = p[idx:idx+4]
+    sigma_tau1, sigma_tau2 = _sigma(idx), _sigma(idx+1)
+    sigma_f1, sigma_f2 = _sigma(idx+2), _sigma(idx+3)
+    idx += 4
+
+    if zero_phase_mode:
+        phi1_fin = phi2_fin = 0.0
+        sigma_phi1 = sigma_phi2 = 0.0
+    elif cfg.equal_phases:
+        phi1_fin = phi2_fin = p[idx]
+        sigma_phi1 = sigma_phi2 = _sigma(idx)
+    else:
+        phi1_fin, phi2_fin = p[idx:idx+2]
+        sigma_phi1, sigma_phi2 = _sigma(idx), _sigma(idx+1)
+
+    logger.debug("Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e", f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
 
     return FittingResult(
         f1=f1_fin,
         f2=f2_fin,
         zeta1=1/tau1,
         zeta2=1/tau2,
-        phi1=0.0,
-        phi2=0.0,
-        A1=A_shared,
-        A2=A_shared,
+        phi1=phi1_fin,
+        phi2=phi2_fin,
+        A1=A1,
+        A2=A2,
         k_lf=k_lf,
         k_hf=k_hf,
         C_lf=C_lf,
@@ -204,12 +276,12 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
         k_hf_err=sigma_k_hf,
         C_lf_err=sigma_C_lf,
         C_hf_err=sigma_C_hf,
-        A1_err=sigma_A,
-        A2_err=sigma_A,
+        A1_err=sigma_A1,
+        A2_err=sigma_A2,
         tau1_err=sigma_tau1,
         tau2_err=sigma_tau2,
-        phi1_err=0.0,
-        phi2_err=0.0,
+        phi1_err=sigma_phi1,
+        phi2_err=sigma_phi2,
         cost=cost,
     ), cost
 
@@ -219,6 +291,7 @@ def process_pair(
     ds_hf: DataSet,
     *,
     use_theory_guess: bool = True,
+    approximation_config: ApproximationConfig | None = None,
 ) -> Optional[FittingResult]:
     logger.info("Обработка пары T=%d K, H=%d mT", ds_lf.temp_K, ds_lf.field_mT)
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
@@ -569,7 +642,13 @@ def process_pair(
             ds_lf.f1_init, ds_lf.zeta1 = f1, z1
             ds_hf.f2_init, ds_hf.zeta2 = f2, z2
             try:
-                fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
+                if approximation_config is None:
+                    fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
+                else:
+                    if approximation_config is None:
+                        fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
+                    else:
+                        fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds, approximation_config=approximation_config)
             except Exception as exc:
                 logger.debug(
                     "Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s",
@@ -604,7 +683,10 @@ def process_pair(
                 ds_lf.f1_init, ds_lf.zeta1 = f1, z1
                 ds_hf.f2_init, ds_hf.zeta2 = f2, z2
                 try:
-                    fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
+                    if approximation_config is None:
+                        fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds)
+                    else:
+                        fit, cost = fit_pair(ds_lf, ds_hf, freq_bounds=freq_bounds, approximation_config=approximation_config)
                 except Exception as exc:
                     logger.debug(
                         "Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s",
@@ -657,7 +739,8 @@ def process_pair(
             phi2_err=best_fit.phi1_err,
             cost=best_fit.cost,
         )
-    if best_fit.cost is not None and best_fit.cost > MAX_COST:
+    cfg = _effective_config(approximation_config)
+    if best_fit.cost is not None and best_fit.cost > (cfg.max_cost if approximation_config is not None else MAX_COST):
         logger.warning(
             "(%d, %d): аппроксимация отклонена f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
             ds_lf.temp_K,
@@ -681,7 +764,9 @@ def process_pair(
         return best_fit
 
 def fit_single(ds: DataSet,
-               freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None):
+               freq_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None,
+               approximation_config: ApproximationConfig | None = None):
+    cfg = _effective_config(approximation_config)
     t, y = ds.ts.t, ds.ts.s
 
     def _piecewise_time_weights(t: np.ndarray) -> np.ndarray:
@@ -698,43 +783,17 @@ def fit_single(ds: DataSet,
         return w
 
     w = _piecewise_time_weights(t)
-
     f1_init = ds.f1_init
     f2_init = ds.f2_init
-    logger.debug(
-        "Начальные оценки (LF only): f1=%.3f ГГц, f2=%.3f ГГц",
-        f1_init / GHZ,
-        f2_init / GHZ,
-    )
 
     _, phi1_init, A1_init, tau1_init = _single_sine_refine(t, y, f1_init)
-    tau1_init, tau1_lo, tau1_hi = _resolve_tau_bounds(
-        ds.zeta1, tau1_init, 5e-11, 5e-9
-    )
-
+    tau1_init, tau1_lo, tau1_hi = _resolve_tau_bounds(ds.zeta1, tau1_init, 5e-11, 5e-9)
     proto = A1_init * np.exp(-t / tau1_init) * np.cos(2 * PI * f1_init * t + phi1_init)
     _, phi2_init, A2_init, tau2_init = _single_sine_refine(t, y - proto, f2_init)
-    tau2_init, tau2_lo, tau2_hi = _resolve_tau_bounds(
-        ds.zeta2, tau2_init, 5e-12, 5e-10
-    )
+    tau2_init, tau2_lo, tau2_hi = _resolve_tau_bounds(ds.zeta2, tau2_init, 5e-12, 5e-10)
 
     k_init = 1.0
-    C_init = (
-        ds.additive_const_init
-        if ds.additive_const_init is not None and np.isfinite(ds.additive_const_init)
-        else np.mean(y)
-    )
-    shared_A_init = max(0.0, 0.5 * (A1_init + A2_init))
-
-    p0 = np.array([
-        k_init,
-        C_init,
-        shared_A_init,
-        tau1_init,
-        tau2_init,
-        f1_init,
-        f2_init,
-    ])
+    C_init = ds.additive_const_init if ds.additive_const_init is not None and np.isfinite(ds.additive_const_init) else np.mean(y)
 
     if freq_bounds is None:
         f1_lo, f1_hi = f1_init * 0.9, f1_init * 1.2
@@ -742,45 +801,63 @@ def fit_single(ds: DataSet,
     else:
         (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
 
-    lo = np.array([
-        0.5,
-        C_init - np.std(y),
-        0.0,
-        tau1_lo,
-        tau2_lo,
-        f1_lo,
-        f2_lo,
-    ])
-    hi = np.array([
-        2.0,
-        C_init + np.std(y),
-        max(1e-12, shared_A_init * 2),
-        tau1_hi,
-        tau2_hi,
-        f1_hi,
-        f2_hi,
-    ])
+    p0 = [k_init, C_init]
+    lo = [0.5, C_init - np.std(y)]
+    hi = [2.0, C_init + np.std(y)]
 
-    p0 = np.clip(p0, lo, hi)
+    if cfg.equal_amplitudes:
+        a_init = max(0.0, 0.5 * (A1_init + A2_init))
+        p0.append(a_init)
+        lo.append(0.0)
+        hi.append(max(1e-12, a_init * 2))
+    else:
+        p0.extend([A1_init, A2_init])
+        lo.extend([0.0, 0.0])
+        hi.extend([max(1e-12, A1_init * 2), max(1e-12, A2_init * 2)])
 
-    def residuals(p):
-        return _numba_residuals_single(p, t, y, w)
+    p0.extend([tau1_init, tau2_init, f1_init, f2_init])
+    lo.extend([tau1_lo, tau2_lo, f1_lo, f2_lo])
+    hi.extend([tau1_hi, tau2_hi, f1_hi, f2_hi])
 
-    sol = least_squares(
-        residuals,
-        p0,
-        bounds=(lo, hi),
-        method="trf",
-        ftol=3e-16,
-        xtol=3e-16,
-        gtol=3e-16,
-        max_nfev=5000,
-        loss="soft_l1",
-        f_scale=0.1,
-        x_scale="jac",
-        verbose=0,
-    )
+    zero_phase_mode = _zero_phase_mode(cfg)
+    if not zero_phase_mode:
+        if cfg.equal_phases:
+            p0.append(0.5 * (phi1_init + phi2_init))
+            lo.append(-PI - 1e-5)
+            hi.append(PI + 1e-5)
+        else:
+            p0.extend([phi1_init, phi2_init])
+            lo.extend([-PI - 1e-5, -PI - 1e-5])
+            hi.extend([PI + 1e-5, PI + 1e-5])
 
+    p0 = np.clip(np.array(p0), np.array(lo), np.array(hi))
+    lo = np.array(lo)
+    hi = np.array(hi)
+
+    if zero_phase_mode and cfg.equal_amplitudes:
+        residuals = lambda p: _numba_residuals_single_sine_zero_phase_equal_amp(p, t, y, w)
+    elif (not zero_phase_mode) and (not cfg.equal_amplitudes) and (not cfg.equal_phases):
+        residuals = lambda p: _numba_residuals_single(p, t, y, w)
+    else:
+        def residuals(p):
+            idx = 0
+            k = p[idx]; C = p[idx + 1]; idx += 2
+            if cfg.equal_amplitudes:
+                A1 = A2 = p[idx]; idx += 1
+            else:
+                A1, A2 = p[idx:idx + 2]; idx += 2
+            tau1, tau2, f1, f2 = p[idx:idx + 4]; idx += 4
+            if zero_phase_mode:
+                core = A1 * np.exp(-t / tau1) * np.sin(2 * np.pi * f1 * t) + A2 * np.exp(-t / tau2) * np.sin(2 * np.pi * f2 * t)
+            else:
+                if cfg.equal_phases:
+                    phi1 = phi2 = p[idx]
+                else:
+                    phi1, phi2 = p[idx:idx + 2]
+                core = A1 * np.exp(-t / tau1) * np.cos(2 * np.pi * f1 * t + phi1) + A2 * np.exp(-t / tau2) * np.cos(2 * np.pi * f2 * t + phi2)
+            return w * (k * core + C - y)
+
+    sol = least_squares(residuals, p0, bounds=(lo, hi), **_build_least_squares_kwargs(cfg))
     p = sol.x
     cost = sol.cost
     m, n = sol.jac.shape
@@ -789,33 +866,38 @@ def fit_single(ds: DataSet,
     except np.linalg.LinAlgError:
         cov = np.full((n, n), np.nan)
 
-    def _sigma(idx: int) -> float:
+    def _sigma(i: int) -> float:
         try:
-            val = float(cov[idx, idx])
+            v = float(cov[i, i])
         except Exception:
-            return float("nan")
-        if not np.isfinite(val) or val < 0:
-            return float("nan")
-        return math.sqrt(val)
+            return float('nan')
+        return math.sqrt(v) if np.isfinite(v) and v >= 0 else float('nan')
 
-    sigma_k = _sigma(0)
-    sigma_C = _sigma(1)
-    sigma_A = _sigma(2)
-    sigma_tau1 = _sigma(3)
-    sigma_tau2 = _sigma(4)
-    sigma_f1 = _sigma(5)
-    sigma_f2 = _sigma(6)
-
-    (k_fin, C_fin, A_fin, tau1_fin, tau2_fin,
-     f1_fin, f2_fin) = p
-    logger.debug(
-        "Результат LF-only: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
-        f1_fin / GHZ,
-        sigma_f1 / GHZ,
-        f2_fin / GHZ,
-        sigma_f2 / GHZ,
-        cost,
-    )
+    idx = 0
+    k_fin, C_fin = p[idx], p[idx + 1]
+    sigma_k, sigma_C = _sigma(idx), _sigma(idx + 1)
+    idx += 2
+    if cfg.equal_amplitudes:
+        A1_fin = A2_fin = p[idx]
+        sigma_A1 = sigma_A2 = _sigma(idx)
+        idx += 1
+    else:
+        A1_fin, A2_fin = p[idx:idx + 2]
+        sigma_A1, sigma_A2 = _sigma(idx), _sigma(idx + 1)
+        idx += 2
+    tau1_fin, tau2_fin, f1_fin, f2_fin = p[idx:idx + 4]
+    sigma_tau1, sigma_tau2 = _sigma(idx), _sigma(idx + 1)
+    sigma_f1, sigma_f2 = _sigma(idx + 2), _sigma(idx + 3)
+    idx += 4
+    if zero_phase_mode:
+        phi1_fin = phi2_fin = 0.0
+        sigma_phi1 = sigma_phi2 = 0.0
+    elif cfg.equal_phases:
+        phi1_fin = phi2_fin = p[idx]
+        sigma_phi1 = sigma_phi2 = _sigma(idx)
+    else:
+        phi1_fin, phi2_fin = p[idx:idx+2]
+        sigma_phi1, sigma_phi2 = _sigma(idx), _sigma(idx+1)
 
     return (
         FittingResult(
@@ -823,26 +905,26 @@ def fit_single(ds: DataSet,
             f2=f2_fin,
             zeta1=1 / tau1_fin,
             zeta2=1 / tau2_fin,
-            phi1=0.0,
-            phi2=0.0,
-            A1=A_fin,
-            A2=A_fin,
+            phi1=phi1_fin,
+            phi2=phi2_fin,
+            A1=A1_fin,
+            A2=A2_fin,
             k_lf=k_fin,
-            k_hf=float("nan"),
+            k_hf=float('nan'),
             C_lf=C_fin,
-            C_hf=float("nan"),
+            C_hf=float('nan'),
             f1_err=sigma_f1,
             f2_err=sigma_f2,
             k_lf_err=sigma_k,
-            k_hf_err=float("nan"),
+            k_hf_err=float('nan'),
             C_lf_err=sigma_C,
-            C_hf_err=float("nan"),
-            A1_err=sigma_A,
-            A2_err=sigma_A,
+            C_hf_err=float('nan'),
+            A1_err=sigma_A1,
+            A2_err=sigma_A2,
             tau1_err=sigma_tau1,
             tau2_err=sigma_tau2,
-            phi1_err=0.0,
-            phi2_err=0.0,
+            phi1_err=sigma_phi1,
+            phi2_err=sigma_phi2,
             cost=cost,
         ),
         cost,
@@ -853,6 +935,7 @@ def process_lf_only(
     ds_lf: DataSet,
     *,
     use_theory_guess: bool = True,
+    approximation_config: ApproximationConfig | None = None,
 ) -> Optional[FittingResult]:
     logger.info(
         "LF-only обработка пары T=%d K, H=%d mT",
@@ -1113,7 +1196,10 @@ def process_lf_only(
             ds_lf.f1_init, ds_lf.zeta1 = f1, z1
             ds_lf.f2_init, ds_lf.zeta2 = f2, z2
             try:
-                fit, cost = fit_single(ds_lf, freq_bounds=freq_bounds)
+                if approximation_config is None:
+                    fit, cost = fit_single(ds_lf, freq_bounds=freq_bounds)
+                else:
+                    fit, cost = fit_single(ds_lf, freq_bounds=freq_bounds, approximation_config=approximation_config)
             except Exception as exc:
                 logger.debug(
                     "Неудачная попытка f1=%.3f ГГц, f2=%.3f ГГц: %s",
@@ -1165,7 +1251,8 @@ def process_lf_only(
             cost=best_fit.cost,
         )
 
-    if best_fit.cost is not None and best_fit.cost > MAX_COST:
+    cfg = _effective_config(approximation_config)
+    if best_fit.cost is not None and best_fit.cost > (cfg.max_cost if approximation_config is not None else MAX_COST):
         logger.warning(
             "(%d, %d): аппроксимация отклонена f1=%.3f ГГц, f2=%.3f ГГц, cost=%.3e",
             ds_lf.temp_K,

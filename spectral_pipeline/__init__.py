@@ -116,4 +116,7 @@ __all__ = [
     "DataSet", "FittingResult", "RecordMeta", "TimeSeries",
     "GHZ", "NS", "PI", "FREQ_TAG", "logger", "LOG_PATH",
     "C_M_S", "LF_BAND", "HF_BAND",
+    "ApproximationConfig", "DEFAULT_APPROXIMATION_CONFIG",
 ]
+
+from .approximation_config import ApproximationConfig, DEFAULT_APPROXIMATION_CONFIG
