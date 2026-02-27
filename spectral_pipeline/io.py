@@ -6,6 +6,7 @@ from typing import List
 import numpy as np
 
 from . import DataSet, TimeSeries, RecordMeta, logger, GHZ, C_M_S
+from .approximation_config import ApproximationConfig, DEFAULT_APPROXIMATION_CONFIG
 
 
 def _replace_spike_segment(x: np.ndarray, s: np.ndarray, lower: float, upper: float) -> np.ndarray:
@@ -31,9 +32,10 @@ def _replace_spike_segment(x: np.ndarray, s: np.ndarray, lower: float, upper: fl
     return s_copy
 
 
-def load_records(root: Path) -> List[DataSet]:
+def load_records(root: Path, approximation_config: ApproximationConfig | None = None) -> List[DataSet]:
     """Читает все *.dat файлы в каталоге *root* (или *root/data*)
     и возвращает список DataSet."""
+    cfg = approximation_config or DEFAULT_APPROXIMATION_CONFIG
     pattern = re.compile(r"_([+-]?\d+)mT_(\d+)K_(HF|LF)_.*\.dat$", re.IGNORECASE)
     datasets: List[DataSet] = []
     data_dir = root / "data" if (root / "data").is_dir() else root
@@ -56,11 +58,9 @@ def load_records(root: Path) -> List[DataSet]:
         x0 = x[np.argmax(s)]
         t_all = 2.0 * (x - x0) / C_M_S  # секунды
 
-        # Вырезаем выбросы
-        s = _replace_spike_segment(x, s, 136.9, 137.05)
-        s = _replace_spike_segment(x, s, 142.9, 143.05)
-        s = _replace_spike_segment(x, s, 132.85, 132.95)
-        s = _replace_spike_segment(x, s, 133.15, 133.25)
+        # Вырезаем выбросы по заданным интервалам
+        for lower, upper in cfg.outlier_intervals:
+            s = _replace_spike_segment(x, s, lower, upper)
 
         pk = int(np.argmax(s))
         minima_all = np.where(np.diff(np.signbit(np.diff(s))) < 0)[0] + 1
@@ -89,13 +89,13 @@ def load_records(root: Path) -> List[DataSet]:
 
         # Для LF дополнительно ограничиваем длительность 0.7 нс
         if tag == "LF":
-            cutoff = 0.3e-9
+            cutoff = cfg.cutoff_lf_s
             end = np.searchsorted(t, cutoff, "right")
             t, s = t[:end], s[:end]
 
         # Для HF дополнительно ограничиваем длительность 0.08 нс
         if tag == "HF":
-            cutoff = 0.08e-9
+            cutoff = cfg.cutoff_hf_s
             end = np.searchsorted(t, cutoff, "right")
             t, s = t[:end], s[:end]
 

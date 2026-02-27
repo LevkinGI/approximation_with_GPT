@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Dict, List, Protocol, Tuple
@@ -9,14 +9,26 @@ import logging
 import numpy as np
 
 from . import DataSet, logger, LOG_PATH
+from .approximation_config import ApproximationConfig, DEFAULT_APPROXIMATION_CONFIG
 
 
 class PairProcessor(Protocol):
-    def __call__(self, ds_lf: DataSet, ds_hf: DataSet, *, use_theory_guess: bool) -> object | None: ...
+    def __call__(
+        self,
+        ds_lf: DataSet,
+        ds_hf: DataSet,
+        *,
+        approximation_config: ApproximationConfig,
+    ) -> object | None: ...
 
 
 class LfProcessor(Protocol):
-    def __call__(self, ds_lf: DataSet, *, use_theory_guess: bool) -> object | None: ...
+    def __call__(
+        self,
+        ds_lf: DataSet,
+        *,
+        approximation_config: ApproximationConfig,
+    ) -> object | None: ...
 
 
 class Plotter(Protocol):
@@ -27,7 +39,7 @@ class Exporter(Protocol):
     def __call__(self, triples: List[Tuple[DataSet, DataSet]], root: Path, outfile: Path | None = None) -> object: ...
 
 
-LoaderFn = Callable[[Path], List[DataSet]]
+LoaderFn = Callable[[Path, ApproximationConfig], List[DataSet]]
 CrossingFinder = Callable[[Path, int, int], tuple[str, float] | None]
 
 
@@ -66,10 +78,13 @@ def _process_pair(
     ds_hf: DataSet,
     *,
     hooks: PipelineHooks,
-    use_theory_guess: bool,
+    approximation_config: ApproximationConfig,
 ) -> object | None:
     try:
-        return hooks.pair_processor(ds_lf, ds_hf, use_theory_guess=use_theory_guess)
+        try:
+            return hooks.pair_processor(ds_lf, ds_hf, approximation_config=approximation_config)
+        except TypeError:
+            return hooks.pair_processor(ds_lf, ds_hf, use_theory_guess=approximation_config.use_theory_guess)
     except Exception as exc:  # pragma: no cover - passthrough to logger
         logger.error("Ошибка обработки %s: %s", key, exc)
         return None
@@ -80,10 +95,13 @@ def _process_lf_only(
     ds_lf: DataSet,
     *,
     hooks: PipelineHooks,
-    use_theory_guess: bool,
+    approximation_config: ApproximationConfig,
 ) -> object | None:
     try:
-        return hooks.lf_only_processor(ds_lf, use_theory_guess=use_theory_guess)
+        try:
+            return hooks.lf_only_processor(ds_lf, approximation_config=approximation_config)
+        except TypeError:
+            return hooks.lf_only_processor(ds_lf, use_theory_guess=approximation_config.use_theory_guess)
     except Exception as exc:  # pragma: no cover - passthrough to logger
         logger.error("Ошибка обработки %s: %s", key, exc)
         return None
@@ -123,7 +141,7 @@ def _fit_pairs(
     root: Path,
     *,
     hooks: PipelineHooks,
-    use_theory_guess: bool,
+    approximation_config: ApproximationConfig,
 ) -> Tuple[List[Tuple[DataSet, DataSet]], int]:
     triples: List[Tuple[DataSet, DataSet]] = []
     success_count = 0
@@ -134,14 +152,13 @@ def _fit_pairs(
         ds_lf = pair["LF"]
         ds_hf = pair.get("HF")
 
-        crossing = hooks.crossing_finder(root, ds_lf.field_mT, ds_lf.temp_K)
-        use_lf_only = _should_use_lf_only(crossing, ds_lf)
+        use_lf_only = approximation_config.force_lf_only
 
         if use_lf_only or ds_hf is None:
-            fit = _process_lf_only(key, ds_lf, hooks=hooks, use_theory_guess=use_theory_guess)
+            fit = _process_lf_only(key, ds_lf, hooks=hooks, approximation_config=approximation_config)
             ds_hf = ds_hf or ds_lf
         else:
-            fit = _process_pair(key, ds_lf, ds_hf, hooks=hooks, use_theory_guess=use_theory_guess)
+            fit = _process_pair(key, ds_lf, ds_hf, hooks=hooks, approximation_config=approximation_config)
 
         if fit is not None:
             success_count += 1
@@ -157,7 +174,8 @@ def run_pipeline(
     do_plot: bool = True,
     excel_path: str | None = None,
     log_level: str = "DEBUG",
-    use_theory_guess: bool = True,
+    use_theory_guess: bool | None = None,
+    approximation_config: ApproximationConfig | None = None,
     hooks: PipelineHooks,
 ):
     level = getattr(logging, log_level.upper(), logging.INFO)
@@ -166,10 +184,17 @@ def run_pipeline(
         handler.setLevel(level)
     logger.info("Лог-файл: %s", LOG_PATH)
 
+    cfg = approximation_config or DEFAULT_APPROXIMATION_CONFIG
+    resolved_use_theory_guess = cfg.use_theory_guess if use_theory_guess is None else use_theory_guess
+    active_cfg = replace(cfg, use_theory_guess=resolved_use_theory_guess)
+
     root = Path(data_dir).resolve()
     logger.info("Начало обработки каталога %s", root)
 
-    datasets = hooks.loader(root)
+    try:
+        datasets = hooks.loader(root, active_cfg)
+    except TypeError:
+        datasets = hooks.loader(root)
     if not datasets:
         logger.error("В каталоге %s отсутствуют файлы .dat", root)
         return None
@@ -177,13 +202,13 @@ def run_pipeline(
 
     grouped = _group_by_conditions(datasets)
     triples, success_count = _fit_pairs(
-        grouped, root, hooks=hooks, use_theory_guess=use_theory_guess
+        grouped, root, hooks=hooks, approximation_config=active_cfg
     )
 
     logger.info("Успешно аппроксимировано пар: %d", success_count)
 
     if do_plot and success_count:
-        hooks.plotter(triples, use_theory_guess=use_theory_guess)
+        hooks.plotter(triples, use_theory_guess=resolved_use_theory_guess)
 
     out_excel = Path(excel_path) if excel_path else None
     if success_count:
