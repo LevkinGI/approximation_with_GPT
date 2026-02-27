@@ -92,12 +92,13 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     C_hf_init = np.mean(y_hf)
 
     shared_A_init = max(0.0, 0.5 * (A1_init + A2_init))
+    q_init = max(1e-15, 0.5 * (tau1_init * f1_init + tau2_init * f2_init))
 
     p0 = np.array([
         k_lf_init, k_hf_init,
         C_lf_init, C_hf_init,
         shared_A_init,
-        tau1_init,  tau2_init,
+        q_init,
         f1_init,    f2_init,
     ])
 
@@ -107,18 +108,23 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     else:
         (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
 
+    q_lo = max(tau1_lo * f1_lo, tau2_lo * f2_lo, 1e-15)
+    q_hi = min(tau1_hi * f1_hi, tau2_hi * f2_hi)
+    if q_hi <= q_lo:
+        q_hi = q_lo * 10.0
+
     lo = np.array([
         0.5, 0.5,
         C_lf_init - np.std(y_lf), C_hf_init - np.std(y_hf),
         0.0,
-        tau1_lo, tau2_lo,
+        q_lo,
         f1_lo, f2_lo,
     ])
     hi = np.array([
         2, 2,
         C_lf_init + np.std(y_lf), C_hf_init + np.std(y_hf),
         max(1e-12, shared_A_init * 2),
-        tau1_hi, tau2_hi,
+        q_hi,
         f1_hi, f2_hi,
     ])
 
@@ -173,14 +179,28 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
     sigma_C_lf = _sigma(2)
     sigma_C_hf = _sigma(3)
     sigma_A = _sigma(4)
-    sigma_tau1 = _sigma(5)
-    sigma_tau2 = _sigma(6)
-    sigma_f1 = _sigma(7)
-    sigma_f2 = _sigma(8)
+    sigma_f1 = _sigma(6)
+    sigma_f2 = _sigma(7)
 
     (k_lf, k_hf, C_lf, C_hf,
-      A_shared, tau1, tau2,
+      A_shared, Q_fin,
       f1_fin, f2_fin) = p
+    tau1 = Q_fin / f1_fin
+    tau2 = Q_fin / f2_fin
+
+    def _tau_sigma(q_idx: int, f_idx: int, q: float, f: float) -> float:
+        dq = 1.0 / f
+        df = -q / (f * f)
+        var_q = float(cov[q_idx, q_idx]) if np.isfinite(cov[q_idx, q_idx]) else np.nan
+        var_f = float(cov[f_idx, f_idx]) if np.isfinite(cov[f_idx, f_idx]) else np.nan
+        cov_qf = float(cov[q_idx, f_idx]) if np.isfinite(cov[q_idx, f_idx]) else np.nan
+        if not np.isfinite(var_q) or not np.isfinite(var_f) or not np.isfinite(cov_qf):
+            return float("nan")
+        var_tau = dq * dq * var_q + df * df * var_f + 2.0 * dq * df * cov_qf
+        return math.sqrt(var_tau) if var_tau >= 0 and np.isfinite(var_tau) else float("nan")
+
+    sigma_tau1 = _tau_sigma(5, 6, Q_fin, f1_fin)
+    sigma_tau2 = _tau_sigma(5, 7, Q_fin, f2_fin)
     logger.debug(
         "Результат: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
         f1_fin/GHZ, sigma_f1/GHZ, f2_fin/GHZ, sigma_f2/GHZ, cost)
@@ -725,13 +745,13 @@ def fit_single(ds: DataSet,
         else np.mean(y)
     )
     shared_A_init = max(0.0, 0.5 * (A1_init + A2_init))
+    q_init = max(1e-15, 0.5 * (tau1_init * f1_init + tau2_init * f2_init))
 
     p0 = np.array([
         k_init,
         C_init,
         shared_A_init,
-        tau1_init,
-        tau2_init,
+        q_init,
         f1_init,
         f2_init,
     ])
@@ -742,12 +762,16 @@ def fit_single(ds: DataSet,
     else:
         (f1_lo, f1_hi), (f2_lo, f2_hi) = freq_bounds
 
+    q_lo = max(tau1_lo * f1_lo, tau2_lo * f2_lo, 1e-15)
+    q_hi = min(tau1_hi * f1_hi, tau2_hi * f2_hi)
+    if q_hi <= q_lo:
+        q_hi = q_lo * 10.0
+
     lo = np.array([
         0.5,
         C_init - np.std(y),
         0.0,
-        tau1_lo,
-        tau2_lo,
+        q_lo,
         f1_lo,
         f2_lo,
     ])
@@ -755,8 +779,7 @@ def fit_single(ds: DataSet,
         2.0,
         C_init + np.std(y),
         max(1e-12, shared_A_init * 2),
-        tau1_hi,
-        tau2_hi,
+        q_hi,
         f1_hi,
         f2_hi,
     ])
@@ -801,13 +824,27 @@ def fit_single(ds: DataSet,
     sigma_k = _sigma(0)
     sigma_C = _sigma(1)
     sigma_A = _sigma(2)
-    sigma_tau1 = _sigma(3)
-    sigma_tau2 = _sigma(4)
-    sigma_f1 = _sigma(5)
-    sigma_f2 = _sigma(6)
+    sigma_f1 = _sigma(4)
+    sigma_f2 = _sigma(5)
 
-    (k_fin, C_fin, A_fin, tau1_fin, tau2_fin,
+    (k_fin, C_fin, A_fin, Q_fin,
      f1_fin, f2_fin) = p
+    tau1_fin = Q_fin / f1_fin
+    tau2_fin = Q_fin / f2_fin
+
+    def _tau_sigma(q_idx: int, f_idx: int, q: float, f: float) -> float:
+        dq = 1.0 / f
+        df = -q / (f * f)
+        var_q = float(cov[q_idx, q_idx]) if np.isfinite(cov[q_idx, q_idx]) else np.nan
+        var_f = float(cov[f_idx, f_idx]) if np.isfinite(cov[f_idx, f_idx]) else np.nan
+        cov_qf = float(cov[q_idx, f_idx]) if np.isfinite(cov[q_idx, f_idx]) else np.nan
+        if not np.isfinite(var_q) or not np.isfinite(var_f) or not np.isfinite(cov_qf):
+            return float("nan")
+        var_tau = dq * dq * var_q + df * df * var_f + 2.0 * dq * df * cov_qf
+        return math.sqrt(var_tau) if var_tau >= 0 and np.isfinite(var_tau) else float("nan")
+
+    sigma_tau1 = _tau_sigma(3, 4, Q_fin, f1_fin)
+    sigma_tau2 = _tau_sigma(3, 5, Q_fin, f2_fin)
     logger.debug(
         "Результат LF-only: f1=%.3f±%.3f ГГц, f2=%.3f±%.3f ГГц, cost=%.3e",
         f1_fin / GHZ,

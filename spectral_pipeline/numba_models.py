@@ -21,16 +21,18 @@ def _core_signal(t: NDArray, A1, A2, tau1, tau2, f1, f2, phi1, phi2) -> NDArray:
 @njit(fastmath=True, cache=True)
 def _numba_residuals(p, t_all, y_all, weights_all, split_idx):
     # Распаковка параметров
-    # Порядок: k_lf, k_hf, C_lf, C_hf, A, tau1, tau2, f1, f2
+    # Порядок: k_lf, k_hf, C_lf, C_hf, A, Q, f1, f2
     k_lf = p[0]
     k_hf = p[1]
     C_lf = p[2]
     C_hf = p[3]
     A = p[4]
-    tau1 = p[5]
-    tau2 = p[6]
-    f1 = p[7]
-    f2 = p[8]
+    Q = p[5]
+    f1 = p[6]
+    f2 = p[7]
+
+    tau1 = Q / f1
+    tau2 = Q / f2
 
     inv_tau1 = -1.0 / tau1
     inv_tau2 = -1.0 / tau2
@@ -59,10 +61,12 @@ def _numba_residuals_single(p, t, y, w):
     k = p[0]
     C = p[1]
     A = p[2]
-    tau1 = p[3]
-    tau2 = p[4]
-    f1 = p[5]
-    f2 = p[6]
+    Q = p[3]
+    f1 = p[4]
+    f2 = p[5]
+
+    tau1 = Q / f1
+    tau2 = Q / f2
 
     inv_tau1 = -1.0 / tau1
     inv_tau2 = -1.0 / tau2
