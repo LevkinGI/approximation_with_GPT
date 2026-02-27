@@ -200,7 +200,7 @@ def fit_pair(ds_lf: DataSet, ds_hf: DataSet,
                     phi1 = phi2 = p[idx]
                 else:
                     phi1, phi2 = p[idx:idx + 2]
-                signal = A1 * np.exp(-t_all / tau1) * np.cos(2 * np.pi * f1 * t_all + phi1) + A2 * np.exp(-t_all / tau2) * np.cos(2 * np.pi * f2 * t_all + phi2)
+                signal = A1 * np.exp(-t_all / tau1) * np.sin(2 * np.pi * f1 * t_all + phi1) + A2 * np.exp(-t_all / tau2) * np.sin(2 * np.pi * f2 * t_all + phi2)
             res = np.empty_like(y_all)
             res[:split_idx] = (k_lf * signal[:split_idx] + C_lf - y_all[:split_idx]) * weights_all[:split_idx]
             res[split_idx:] = (k_hf * signal[split_idx:] + C_hf - y_all[split_idx:]) * weights_all[split_idx:]
@@ -854,7 +854,7 @@ def fit_single(ds: DataSet,
                     phi1 = phi2 = p[idx]
                 else:
                     phi1, phi2 = p[idx:idx + 2]
-                core = A1 * np.exp(-t / tau1) * np.cos(2 * np.pi * f1 * t + phi1) + A2 * np.exp(-t / tau2) * np.cos(2 * np.pi * f2 * t + phi2)
+                core = A1 * np.exp(-t / tau1) * np.sin(2 * np.pi * f1 * t + phi1) + A2 * np.exp(-t / tau2) * np.sin(2 * np.pi * f2 * t + phi2)
             return w * (k * core + C - y)
 
     sol = least_squares(residuals, p0, bounds=(lo, hi), **_build_least_squares_kwargs(cfg))

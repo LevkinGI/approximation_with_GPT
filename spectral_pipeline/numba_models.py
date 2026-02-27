@@ -12,8 +12,8 @@ def _core_signal(t: NDArray, A1, A2, tau1, tau2, f1, f2, phi1, phi2) -> NDArray:
     omega1 = 2 * np.pi * f1
     omega2 = 2 * np.pi * f2
 
-    term1 = A1 * np.exp(t * inv_tau1) * np.cos(omega1 * t + phi1)
-    term2 = A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2)
+    term1 = A1 * np.exp(t * inv_tau1) * np.sin(omega1 * t + phi1)
+    term2 = A2 * np.exp(t * inv_tau2) * np.sin(omega2 * t + phi2)
     return term1 + term2
 
 
@@ -50,14 +50,14 @@ def _numba_residuals(p, t_all, y_all, weights_all, split_idx):
     residuals = np.empty_like(y_all)
     for i in range(split_idx):
         t = t_all[i]
-        signal = (A1 * np.exp(t * inv_tau1) * np.cos(omega1 * t + phi1) +
-                  A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2))
+        signal = (A1 * np.exp(t * inv_tau1) * np.sin(omega1 * t + phi1) +
+                  A2 * np.exp(t * inv_tau2) * np.sin(omega2 * t + phi2))
         residuals[i] = (k_lf * signal + C_lf - y_all[i]) * weights_all[i]
 
     for i in range(split_idx, len(t_all)):
         t = t_all[i]
-        signal = (A1 * np.exp(t * inv_tau1) * np.cos(omega1 * t + phi1) +
-                  A2 * np.exp(t * inv_tau2) * np.cos(omega2 * t + phi2))
+        signal = (A1 * np.exp(t * inv_tau1) * np.sin(omega1 * t + phi1) +
+                  A2 * np.exp(t * inv_tau2) * np.sin(omega2 * t + phi2))
         residuals[i] = (k_hf * signal + C_hf - y_all[i]) * weights_all[i]
 
     return residuals
@@ -85,8 +85,8 @@ def _numba_residuals_single(p, t, y, w):
     res = np.empty_like(y)
     for i in range(len(t)):
         ti = t[i]
-        core = (A1 * np.exp(ti * inv_tau1) * np.cos(omega1 * ti + phi1) +
-                A2 * np.exp(ti * inv_tau2) * np.cos(omega2 * ti + phi2))
+        core = (A1 * np.exp(ti * inv_tau1) * np.sin(omega1 * ti + phi1) +
+                A2 * np.exp(ti * inv_tau2) * np.sin(omega2 * ti + phi2))
         res[i] = w[i] * (k * core + C - y[i])
     return res
 
