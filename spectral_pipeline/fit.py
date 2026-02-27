@@ -302,7 +302,7 @@ def process_pair(
     lf_band = cfg.lf_band_hz
     hf_band = cfg.hf_band_hz
 
-    logger.info("Начата аппроксимация сигналов при H=%.0f mT, T=%.0f K", float(ds_lf.field_mT), float(ds_lf.temp_K))
+    logger.info("Начата аппроксимация сигналов при H=%.0f мТл, T=%.0f К", float(ds_lf.field_mT), float(ds_lf.temp_K))
     tau_guess_lf, tau_guess_hf = 3e-10, 3e-11
     t_lf, y_lf = ds_lf.ts.t, ds_lf.ts.s
     t_hf, y_hf = ds_hf.ts.t, ds_hf.ts.s
@@ -953,7 +953,7 @@ def process_lf_only(
     hf_band = cfg.hf_band_hz
 
     logger.info(
-        "Начата аппроксимация сигналов при H=%.0f mT, T=%.0f K",
+        "Начата аппроксимация сигналов при H=%.0f мТл, T=%.0f К",
         float(ds_lf.field_mT),
         float(ds_lf.temp_K),
     )
