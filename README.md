@@ -39,6 +39,5 @@ pytest
 - `equal_amplitudes` — равенство амплитуд мод.
 - `equal_phases` — равенство фаз мод.
 - `zero_phases_if_equal` — фиксация фаз в ноль, применяется только если `equal_phases=True`.
-- `use_sine_for_zero_phase` — использовать синусную форму при нулевых фазах.
 
 Также там находятся прочие настройки аппроксимации: `max_cost` и параметры `least_squares` (`ftol`, `xtol`, `gtol`, `max_nfev`, `loss`, `f_scale`, `x_scale`).

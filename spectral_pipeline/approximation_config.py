@@ -13,7 +13,6 @@ class ApproximationConfig:
     # Применяется только если equal_phases=True.
     # При True и использовании синусной формы фазы фиксируются в 0.
     zero_phases_if_equal: bool = True
-    use_sine_for_zero_phase: bool = True
 
     # Критерий успешной аппроксимации
     max_cost: float = 100.0

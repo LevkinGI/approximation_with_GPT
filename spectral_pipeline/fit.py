@@ -36,7 +36,7 @@ def _effective_config(cfg: ApproximationConfig | None) -> ApproximationConfig:
 
 
 def _zero_phase_mode(cfg: ApproximationConfig) -> bool:
-    return cfg.equal_phases and cfg.zero_phases_if_equal and cfg.use_sine_for_zero_phase
+    return cfg.equal_phases and cfg.zero_phases_if_equal
 
 
 def _build_least_squares_kwargs(cfg: ApproximationConfig) -> dict:
