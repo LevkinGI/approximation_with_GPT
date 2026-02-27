@@ -22,7 +22,7 @@ if __name__ == '__main__':
         action='store_false',
         help='не использовать теоретические значения при подборе',
     )
-    parser.set_defaults(use_theory_guess=True)
+    parser.set_defaults(use_theory_guess=None)
     args = parser.parse_args()
     main(args.data_dir, do_plot=not args.no_plot,
          log_level=args.log_level,

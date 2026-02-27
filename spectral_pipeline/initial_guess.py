@@ -30,12 +30,19 @@ def _resolve_tau_bounds(
     return tau_init, default_lo, default_hi
 
 
-def _single_sine_refine(t: NDArray, y: NDArray, f0: float) -> tuple[float, float, float, float]:
+def _single_sine_refine(
+    t: NDArray,
+    y: NDArray,
+    f0: float,
+    *,
+    lf_band_hz: tuple[float, float] = LF_BAND,
+    hf_band_hz: tuple[float, float] = HF_BAND,
+) -> tuple[float, float, float, float]:
     A0 = 0.5 * (y.max() - y.min())
     tau0 = (t[-1] - t[0]) / 3
     p0 = [A0, f0, 0.0, tau0, y.mean()]
-    lo = np.array([0.0, LF_BAND[0], -np.pi, tau0 / 10, y.min() - abs(np.ptp(y))])
-    hi = np.array([3 * A0, HF_BAND[1], np.pi, tau0 * 10, y.max() + abs(np.ptp(y))])
+    lo = np.array([0.0, lf_band_hz[0], -np.pi, tau0 / 10, y.min() - abs(np.ptp(y))])
+    hi = np.array([3 * A0, hf_band_hz[1], np.pi, tau0 * 10, y.max() + abs(np.ptp(y))])
 
     def model(p):
         A, f, phi, tau, C = p

@@ -15,7 +15,7 @@ def _make_ds(tag, root, *, field=1, temp=1):
     return DataSet(field_mT=field, temp_K=temp, tag=tag, ts=ts, root=root)
 
 
-def test_ignore_hf_after_crossing(monkeypatch, tmp_path):
+def test_no_crossing_switch_when_force_lf_only_false(monkeypatch, tmp_path):
     lf1 = _make_ds("LF", tmp_path, field=1, temp=1)
     hf1 = _make_ds("HF", tmp_path, field=1, temp=1)
     lf2 = _make_ds("LF", tmp_path, field=1, temp=3)
@@ -59,8 +59,8 @@ def test_ignore_hf_after_crossing(monkeypatch, tmp_path):
 
     triples = cli.main(str(tmp_path), return_datasets=True, do_plot=False)
 
-    assert called["pair"] == 1
-    assert called["lf"] == 1
+    assert called["pair"] == 2
+    assert called["lf"] == 0
     assert len(triples) == 2
     assert triples[0] == (lf1, hf1)
     assert triples[1] == (lf2, hf2)

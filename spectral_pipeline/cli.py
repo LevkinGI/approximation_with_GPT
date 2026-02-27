@@ -8,6 +8,7 @@ import pandas as pd
 from openpyxl.styles import Border, Side, Alignment
 
 from . import DataSet, GHZ, NS, logger
+from .approximation_config import ApproximationConfig, DEFAULT_APPROXIMATION_CONFIG
 from .io import load_records
 from .fit import process_pair, process_lf_only
 from .pipeline import PipelineHooks, find_crossing, run_pipeline
@@ -148,13 +149,32 @@ def main(
     do_plot: bool = True,
     excel_path: str | None = None,
     log_level: str = "DEBUG",
-    use_theory_guess: bool = True,
+    use_theory_guess: bool | None = None,
+    approximation_config: ApproximationConfig | None = None,
     hooks: PipelineHooks | None = None,
 ):
+    def _loader(root: Path, cfg: ApproximationConfig):
+        try:
+            return load_records(root, approximation_config=cfg)
+        except TypeError:
+            return load_records(root)
+
+    def _pair_processor(ds_lf: DataSet, ds_hf: DataSet, *, approximation_config: ApproximationConfig):
+        try:
+            return process_pair(ds_lf, ds_hf, approximation_config=approximation_config)
+        except TypeError:
+            return process_pair(ds_lf, ds_hf, use_theory_guess=approximation_config.use_theory_guess)
+
+    def _lf_only_processor(ds_lf: DataSet, *, approximation_config: ApproximationConfig):
+        try:
+            return process_lf_only(ds_lf, approximation_config=approximation_config)
+        except TypeError:
+            return process_lf_only(ds_lf, use_theory_guess=approximation_config.use_theory_guess)
+
     default_hooks = PipelineHooks(
-        loader=load_records,
-        pair_processor=process_pair,
-        lf_only_processor=process_lf_only,
+        loader=_loader,
+        pair_processor=_pair_processor,
+        lf_only_processor=_lf_only_processor,
         plotter=visualize_stacked,
         exporter=export_freq_tables,
         crossing_finder=find_crossing,
@@ -167,20 +187,22 @@ def main(
         excel_path=excel_path,
         log_level=log_level,
         use_theory_guess=use_theory_guess,
+        approximation_config=approximation_config or DEFAULT_APPROXIMATION_CONFIG,
         hooks=active_hooks,
     )
 
 
-def demo(data_dir: str | Path = ".", *, use_theory_guess: bool = True):
+def demo(data_dir: str | Path = ".", *, approximation_config: ApproximationConfig | None = None):
     triples = main(
         data_dir,
         return_datasets=True,
         do_plot=False,
-        use_theory_guess=use_theory_guess,
+        approximation_config=approximation_config,
     )
     if not triples:
         raise RuntimeError("Не найдено корректных пар LF/HF")
-    visualize_stacked(triples, use_theory_guess=use_theory_guess)
+    cfg = approximation_config or DEFAULT_APPROXIMATION_CONFIG
+    visualize_stacked(triples, use_theory_guess=cfg.use_theory_guess)
     print("График открыт в браузере")
 
 
@@ -203,7 +225,7 @@ if __name__ == '__main__':
         action='store_false',
         help='не использовать теоретические значения при подборе',
     )
-    parser.set_defaults(use_theory_guess=True)
+    parser.set_defaults(use_theory_guess=None)
     args = parser.parse_args()
     main(args.data_dir, do_plot=not args.no_plot, excel_path=args.excel,
          log_level=args.log_level, use_theory_guess=args.use_theory_guess)
