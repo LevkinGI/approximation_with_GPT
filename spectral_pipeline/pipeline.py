@@ -32,7 +32,13 @@ class LfProcessor(Protocol):
 
 
 class Plotter(Protocol):
-    def __call__(self, triples: List[Tuple[DataSet, DataSet]], *, use_theory_guess: bool) -> object: ...
+    def __call__(
+        self,
+        triples: List[Tuple[DataSet, DataSet]],
+        *,
+        use_theory_guess: bool,
+        approximation_config: ApproximationConfig,
+    ) -> object: ...
 
 
 class Exporter(Protocol):
@@ -173,18 +179,19 @@ def run_pipeline(
     return_datasets: bool = False,
     do_plot: bool = True,
     excel_path: str | None = None,
-    log_level: str = "DEBUG",
+    log_level: str | None = None,
     use_theory_guess: bool | None = None,
     approximation_config: ApproximationConfig | None = None,
     hooks: PipelineHooks,
 ):
-    level = getattr(logging, log_level.upper(), logging.INFO)
+    cfg = approximation_config or DEFAULT_APPROXIMATION_CONFIG
+    resolved_log_level = log_level if log_level is not None else cfg.log_level
+    level = getattr(logging, resolved_log_level.upper(), logging.INFO)
     logger.setLevel(level)
     for handler in logger.handlers:
         handler.setLevel(level)
     logger.info("Лог-файл: %s", LOG_PATH)
 
-    cfg = approximation_config or DEFAULT_APPROXIMATION_CONFIG
     resolved_use_theory_guess = cfg.use_theory_guess if use_theory_guess is None else use_theory_guess
     active_cfg = replace(cfg, use_theory_guess=resolved_use_theory_guess)
 
@@ -208,7 +215,14 @@ def run_pipeline(
     logger.info("Успешно аппроксимировано пар: %d", success_count)
 
     if do_plot and success_count:
-        hooks.plotter(triples, use_theory_guess=resolved_use_theory_guess)
+        try:
+            hooks.plotter(
+                triples,
+                use_theory_guess=resolved_use_theory_guess,
+                approximation_config=active_cfg,
+            )
+        except TypeError:
+            hooks.plotter(triples, use_theory_guess=resolved_use_theory_guess)
 
     out_excel = Path(excel_path) if excel_path else None
     if success_count:
